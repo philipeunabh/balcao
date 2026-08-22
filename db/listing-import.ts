@@ -5,9 +5,13 @@ import { ensureListingTables } from "./listings";
 import { writePortalSettings } from "./settings";
 
 type UnknownRecord = Record<string, unknown>;
+const IMPORT_SOURCE = "kimi-jornalbalcao";
+const DEFAULT_SOURCE_URL = "https://ow7hfhirtmiiw.kimi.page/data/api.json";
+
 type ImportRecord = {
-  id: string; title: string; description: string; category: string; subcategory: string;
-  priceCents: number | null; negotiable: boolean; images: string[]; displayName: string; whatsapp: string;
+  id: string; externalId: string; externalSlug: string; externalUrl: string; source: string; sourceStatus: string;
+  title: string; description: string; category: string; subcategory: string; priceCents: number | null;
+  negotiable: boolean; images: string[]; displayName: string; whatsapp: string; publishedAt: string; updatedAt: string;
 };
 
 function text(value: unknown) { return typeof value === "string" ? value.trim() : value == null ? "" : String(value); }
@@ -27,20 +31,34 @@ function priceCents(value: unknown) {
 }
 function normalize(source: UnknownRecord, index: number): ImportRecord | null {
   const title = text(first(source, ["title", "titulo", "name", "nome"])); if (!title) return null;
-  const rawId = text(first(source, ["slug", "url_slug", "id", "_id", "codigo", "code"]));
-  const seller = first(source, ["seller", "vendedor", "anunciante"]); const sellerRecord = seller && typeof seller === "object" ? seller as UnknownRecord : {};
+  const rawId = text(first(source, ["id", "_id", "codigo", "code", "slug", "url_slug"]));
+  const externalSlug = text(first(source, ["slug", "url_slug"])) || slug(title, index);
+  const seller = first(source, ["seller", "vendedor"]); const sellerRecord = seller && typeof seller === "object" ? seller as UnknownRecord : {};
+  const categories = first(source, ["categorias", "categories"]);
+  const categoryNames = Array.isArray(categories) ? categories.map(text).filter(Boolean) : [];
   const price = priceCents(first(source, ["price", "preco", "valor", "value"]));
+  const phones = first(source, ["telefones", "phones"]);
+  const phone = Array.isArray(phones) ? phones.map(text).find(Boolean) : first(source, ["whatsapp", "phone", "telefone"]);
+  const sourceStatus = text(first(source, ["status", "post_status"])).toLowerCase() || "publish";
+  const externalId = rawId || externalSlug;
   return {
-    id: `import-${slug(rawId || title, index)}`,
+    id: `${IMPORT_SOURCE}-${slug(externalId, index)}`,
+    externalId,
+    externalSlug,
+    externalUrl: text(first(source, ["link", "url", "permalink"])),
+    source: IMPORT_SOURCE,
+    sourceStatus,
     title: title.slice(0, 120),
-    description: text(first(source, ["description", "descricao", "content", "conteudo"])).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").slice(0, 5000) || `Anúncio importado: ${title}`,
-    category: mapCategory(text(first(source, ["category", "categoria", "categoryName"])), title),
-    subcategory: text(first(source, ["subcategory", "subcategoria", "subCategory", "categoryChild"])),
+    description: text(first(source, ["description", "descricao", "content", "conteudo"])).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 5000) || `Anúncio importado: ${title}`,
+    category: mapCategory(categoryNames[0] || text(first(source, ["category", "categoria", "categoryName"])), title),
+    subcategory: categoryNames.at(-1) || text(first(source, ["subcategory", "subcategoria", "subCategory", "categoryChild"])),
     priceCents: price,
     negotiable: price == null || price === 0,
     images: imageUrls(source),
-    displayName: text(first(sellerRecord, ["name", "nome"])) || text(first(source, ["sellerName", "nomeVendedor"])) || "Importação de anúncios",
-    whatsapp: text(first(sellerRecord, ["whatsapp", "phone", "telefone"]) || first(source, ["whatsapp", "phone", "telefone"])).replace(/\D/g, "").slice(-13) || "31000000000",
+    displayName: text(first(sellerRecord, ["name", "nome"])) || text(first(source, ["anunciante", "sellerName", "nomeVendedor"])) || "Importação de anúncios",
+    whatsapp: text(first(sellerRecord, ["whatsapp", "phone", "telefone"]) || phone).replace(/\D/g, "").slice(-13) || "31000000000",
+    publishedAt: text(first(source, ["data_publicacao", "published_at", "publishedAt"])),
+    updatedAt: text(first(source, ["data_atualizacao", "updated_at", "updatedAt"])),
   };
 }
 function validateSourceUrl(value: string) {
@@ -100,13 +118,17 @@ async function ensureTables() {
     env.DB.prepare("CREATE INDEX IF NOT EXISTS portal_import_queue_status_idx ON portal_import_queue (job_id, status, position)"),
     env.DB.prepare("CREATE INDEX IF NOT EXISTS portal_import_logs_job_idx ON portal_import_logs (job_id, id DESC)"),
   ]);
+  const columns = await env.DB.prepare("PRAGMA table_info(portal_import_jobs)").all<{ name: string }>();
+  if (!columns.results.some((column) => column.name === "deactivated")) {
+    await env.DB.prepare("ALTER TABLE portal_import_jobs ADD COLUMN deactivated INTEGER NOT NULL DEFAULT 0").run();
+  }
 }
 
-export async function startListingImport(sourceUrl: string) {
-  const url = validateSourceUrl(sourceUrl.trim()); await ensureTables();
-  const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 15000);
+export async function startListingImport(sourceUrl = DEFAULT_SOURCE_URL) {
+  const url = validateSourceUrl(sourceUrl.trim() || DEFAULT_SOURCE_URL); await ensureTables();
+  const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 30_000);
   let response: Response;
-  try { response = await fetch(url, { signal: controller.signal, headers: { accept: "application/json" } }); }
+  try { response = await fetch(url, { signal: controller.signal, headers: { accept: "application/json", "user-agent": "Portal Balcao/1.0" } }); }
   finally { clearTimeout(timeout); }
   if (!response.ok) throw new Error(`O endereço de importação respondeu com HTTP ${response.status}.`);
   const json: unknown = await response.json().catch(() => { throw new Error("O endereço não retornou um JSON válido."); });
@@ -114,7 +136,7 @@ export async function startListingImport(sourceUrl: string) {
   const collection = Array.isArray(json) ? json : first(root, ["listings", "anuncios", "ads", "items", "data"]);
   if (!Array.isArray(collection)) throw new Error("O JSON não contém uma lista de anúncios reconhecida.");
   const normalized = collection.slice(0, 3000).flatMap((item, index) => item && typeof item === "object" ? [normalize(item as UnknownRecord, index)].filter((record): record is ImportRecord => Boolean(record)) : []);
-  const records = [...new Map(normalized.map((record) => [record.id, record])).values()];
+  const records = [...new Map(normalized.filter((record) => record.sourceStatus === "publish").map((record) => [record.id, record])).values()];
   if (!records.length) throw new Error("Nenhum anúncio válido foi encontrado no JSON.");
   const userId = await ensureImportCustomer(); await writePortalSettings({ listing_import_url: url });
   const { env } = await import("cloudflare:workers"); const id = crypto.randomUUID(); const now = new Date().toISOString();
@@ -127,11 +149,35 @@ export async function startListingImport(sourceUrl: string) {
   return getListingImport(id);
 }
 
+async function completeListingImport(jobId: string) {
+  const { env } = await import("cloudflare:workers");
+  const job = await env.DB.prepare("SELECT status FROM portal_import_jobs WHERE id = ? LIMIT 1").bind(jobId).first<{ status: string }>();
+  if (!job || job.status !== "running") return;
+  const userId = await ensureImportCustomer();
+  const sourceMarker = `\"importSource\":\"${IMPORT_SOURCE}\"`;
+  const missing = await env.DB.prepare(`SELECT COUNT(*) AS total FROM portal_listings l
+    WHERE l.user_id = ? AND l.status = 'active' AND l.attributes_json LIKE ?
+      AND NOT EXISTS (SELECT 1 FROM portal_import_queue q WHERE q.job_id = ? AND q.listing_id = l.id)`)
+    .bind(userId, `%${sourceMarker}%`, jobId).first<{ total: number }>();
+  const deactivated = Number(missing?.total || 0);
+  const now = new Date().toISOString();
+  await env.DB.batch([
+    env.DB.prepare(`UPDATE portal_listings SET status = 'inactive', updated_at = ?
+      WHERE user_id = ? AND status = 'active' AND attributes_json LIKE ?
+        AND NOT EXISTS (SELECT 1 FROM portal_import_queue q WHERE q.job_id = ? AND q.listing_id = portal_listings.id)`)
+      .bind(now, userId, `%${sourceMarker}%`, jobId),
+    env.DB.prepare("UPDATE portal_import_jobs SET status = 'completed', deactivated = ?, updated_at = ? WHERE id = ? AND status = 'running'")
+      .bind(deactivated, now, jobId),
+    env.DB.prepare("UPDATE portal_users SET active_ads = (SELECT COUNT(*) FROM portal_listings WHERE user_id = ? AND status = 'active'), updated_at = ? WHERE id = ?")
+      .bind(userId, now, userId),
+  ]);
+}
+
 export async function processNextListingImport(jobId: string, categories: Pick<PortalCategory, "name" | "subs">[]) {
   await ensureTables(); const { env } = await import("cloudflare:workers");
   const row = await env.DB.prepare("SELECT listing_id AS listingId, payload_json AS payloadJson FROM portal_import_queue WHERE job_id = ? AND status = 'pending' ORDER BY position LIMIT 1")
     .bind(jobId).first<{ listingId: string; payloadJson: string }>();
-  if (!row) { await env.DB.prepare("UPDATE portal_import_jobs SET status = 'completed', updated_at = ? WHERE id = ? AND status = 'running'").bind(new Date().toISOString(), jobId).run(); return getListingImport(jobId); }
+  if (!row) { await completeListingImport(jobId); return getListingImport(jobId); }
   await env.DB.prepare("UPDATE portal_import_queue SET status = 'processing' WHERE job_id = ? AND listing_id = ?").bind(jobId, row.listingId).run();
   const record = JSON.parse(row.payloadJson) as ImportRecord & { userId: number }; const now = new Date().toISOString();
   try {
@@ -141,19 +187,29 @@ export async function processNextListingImport(jobId: string, categories: Pick<P
     // imagens pode ser executada depois, sem bloquear a publicação do catálogo.
     const images = record.images;
     const existing = await env.DB.prepare("SELECT id FROM portal_listings WHERE id = ? LIMIT 1").bind(record.id).first();
+    const attributes = JSON.stringify({
+      importSource: record.source,
+      externalId: record.externalId,
+      externalSlug: record.externalSlug,
+      externalUrl: record.externalUrl,
+      sourceStatus: record.sourceStatus,
+      sourcePublishedAt: record.publishedAt,
+      sourceUpdatedAt: record.updatedAt,
+    });
     await env.DB.prepare(`INSERT INTO portal_listings (id, user_id, title, description, negotiation_type, category, subcategory,
       price_cents, monthly_rent_cents, iptu_cents, condo_cents, negotiable, address, latitude, longitude, display_name, whatsapp,
       attributes_json, features_json, images_json, cover_image, publication_type, featured_plan, featured_until, expires_at, status,
       payment_provider, payment_reference, payment_method, payment_amount_cents, payment_expires_at, payment_status, created_at, updated_at)
-      VALUES (?, ?, ?, ?, 'Venda', ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, '{}', '[]', ?, ?, 'free', NULL, NULL, NULL,
+      VALUES (?, ?, ?, ?, 'Venda', ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, 'free', NULL, NULL, NULL,
         'active', NULL, NULL, NULL, NULL, NULL, NULL, ?, ?)
       ON CONFLICT(id) DO UPDATE SET user_id=excluded.user_id, title=excluded.title, description=excluded.description,
         category=excluded.category, subcategory=excluded.subcategory, price_cents=excluded.price_cents, negotiable=excluded.negotiable,
         address=excluded.address, latitude=excluded.latitude, longitude=excluded.longitude, display_name=excluded.display_name,
-        whatsapp=excluded.whatsapp, images_json=excluded.images_json, cover_image=excluded.cover_image, status='active', updated_at=excluded.updated_at`)
+        whatsapp=excluded.whatsapp, attributes_json=excluded.attributes_json, images_json=excluded.images_json,
+        cover_image=excluded.cover_image, status='active', updated_at=excluded.updated_at`)
       .bind(record.id, record.userId, record.title, record.description, classification.category, classification.subcategory,
         record.priceCents, record.negotiable ? 1 : 0, location.label, String(location.latitude), String(location.longitude),
-        record.displayName, record.whatsapp, JSON.stringify(images), images[0] || "/favicon.svg", now, now).run();
+        record.displayName, record.whatsapp, attributes, JSON.stringify(images), images[0] || "/favicon.svg", now, now).run();
     await env.DB.batch([
       env.DB.prepare("UPDATE portal_import_queue SET status = 'completed' WHERE job_id = ? AND listing_id = ?").bind(jobId, row.listingId),
       env.DB.prepare(`INSERT INTO portal_import_logs (job_id, listing_id, title, category, subcategory, status, message, created_at)
@@ -170,7 +226,7 @@ export async function processNextListingImport(jobId: string, categories: Pick<P
     ]);
   }
   const pending = await env.DB.prepare("SELECT 1 FROM portal_import_queue WHERE job_id = ? AND status = 'pending' LIMIT 1").bind(jobId).first();
-  if (!pending) await env.DB.prepare("UPDATE portal_import_jobs SET status='completed', updated_at=? WHERE id=?").bind(new Date().toISOString(), jobId).run();
+  if (!pending) await completeListingImport(jobId);
   return getListingImport(jobId);
 }
 
@@ -182,34 +238,10 @@ export async function processListingImportBatch(jobId: string, categories: Pick<
   return state;
 }
 
-export async function synchronizeImportedListings(categories: Pick<PortalCategory, "name" | "subs">[]) {
-  await ensureTables();
-  const { env } = await import("cloudflare:workers");
-  await ensureImportCustomer();
-  const rows = (await env.DB.prepare(`SELECT id, title, description, category, subcategory,
-    price_cents AS priceCents, negotiable, images_json AS imagesJson, display_name AS displayName, whatsapp
-    FROM portal_listings WHERE user_id IN (SELECT id FROM portal_users WHERE lower(email) IN (lower(?), lower('importacao@palcao.com.br')))
-    ORDER BY created_at DESC`).bind(IMPORT_ACCOUNT_EMAIL).all<{
-      id: string; title: string; description: string; category: string; subcategory: string;
-      priceCents: number | null; negotiable: number; imagesJson: string; displayName: string; whatsapp: string;
-    }>()).results;
-  const now = new Date().toISOString();
-  for (let offset = 0; offset < rows.length; offset += 80) {
-    await env.DB.batch(rows.slice(offset, offset + 80).map((row) => {
-      const classification = classifyLocally({ ...row, negotiable: Boolean(row.negotiable), images: [], displayName: row.displayName, whatsapp: row.whatsapp }, categories);
-      return env.DB.prepare("UPDATE portal_listings SET category = ?, subcategory = ?, status = 'active', updated_at = ? WHERE id = ?")
-        .bind(classification.category, classification.subcategory, now, row.id);
-    }));
-  }
-  await env.DB.prepare(`UPDATE portal_users SET active_ads = (SELECT COUNT(*) FROM portal_listings WHERE user_id=portal_users.id), updated_at = ?
-    WHERE lower(email) IN (lower(?), lower('importacao@palcao.com.br'))`).bind(now, IMPORT_ACCOUNT_EMAIL).run();
-  return { synchronized: rows.length, importUserEmail: IMPORT_ACCOUNT_EMAIL };
-}
-
 export async function getListingImport(id?: string) {
   await ensureTables(); const { env } = await import("cloudflare:workers");
-  const job = id ? await env.DB.prepare("SELECT id, source_url AS sourceUrl, status, total, processed, imported, updated, failed, created_at AS createdAt, updated_at AS updatedAt FROM portal_import_jobs WHERE id=?").bind(id).first()
-    : await env.DB.prepare("SELECT id, source_url AS sourceUrl, status, total, processed, imported, updated, failed, created_at AS createdAt, updated_at AS updatedAt FROM portal_import_jobs ORDER BY created_at DESC LIMIT 1").first();
+  const job = id ? await env.DB.prepare("SELECT id, source_url AS sourceUrl, status, total, processed, imported, updated, deactivated, failed, created_at AS createdAt, updated_at AS updatedAt FROM portal_import_jobs WHERE id=?").bind(id).first()
+    : await env.DB.prepare("SELECT id, source_url AS sourceUrl, status, total, processed, imported, updated, deactivated, failed, created_at AS createdAt, updated_at AS updatedAt FROM portal_import_jobs ORDER BY created_at DESC LIMIT 1").first();
   const logs = job ? (await env.DB.prepare("SELECT listing_id AS listingId, title, category, subcategory, status, message, created_at AS createdAt FROM portal_import_logs WHERE job_id=? ORDER BY id DESC LIMIT 200").bind(String(job.id)).all()).results : [];
   return { job: job || null, logs, importUserEmail: IMPORT_ACCOUNT_EMAIL };
 }

@@ -84,18 +84,6 @@ export async function createListing(customer: CustomerRecord, input: ListingInpu
 
 export async function listStoredListings(includePending = false, limit?: number) {
   const { env } = await import("cloudflare:workers"); await ensureListingTables();
-  if (!includePending) {
-    // Importações pertencem a uma conta técnica e não devem ficar presas na
-    // fila editorial destinada aos anúncios criados por usuários.
-    const now = new Date().toISOString();
-    await env.DB.batch([
-      env.DB.prepare(`UPDATE portal_listings SET status='active', updated_at=? WHERE status <> 'active' AND user_id IN
-        (SELECT id FROM portal_users WHERE lower(email) IN (lower('importacao@balcao.com'), lower('importacao@balcao.com.br'), lower('importacao@palcao.com.br')))`)
-        .bind(now),
-      env.DB.prepare(`UPDATE portal_users SET active_ads=(SELECT COUNT(*) FROM portal_listings WHERE user_id=portal_users.id), updated_at=?
-        WHERE lower(email) IN (lower('importacao@balcao.com'), lower('importacao@balcao.com.br'), lower('importacao@palcao.com.br'))`).bind(now),
-    ]);
-  }
   const safeLimit = Number.isInteger(limit) ? Math.min(Math.max(Number(limit), 1), 1000) : null;
   const query = includePending ? `SELECT ${selectColumns()} FROM portal_listings ORDER BY created_at DESC${safeLimit ? " LIMIT ?" : ""}`
     : `SELECT ${selectColumns()} FROM portal_listings WHERE status = 'active' ORDER BY created_at DESC${safeLimit ? " LIMIT ?" : ""}`;

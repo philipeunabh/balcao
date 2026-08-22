@@ -73,7 +73,7 @@ type AiReviewerMessage = { role: "assistant" | "user"; content: string; listings
 type AiReviewerDraft = { title: string; description: string; image: string };
 type AiReviewerAnalysis = { score: number; summary: string; issues: string[]; seoKeywords: string[]; imageStatus: string; imageNotes: string };
 type ListingImportState = {
-  job: null | { id: string; status: string; total: number; processed: number; imported: number; updated: number; failed: number; sourceUrl: string };
+  job: null | { id: string; status: string; total: number; processed: number; imported: number; updated: number; deactivated: number; failed: number; sourceUrl: string };
   logs: Array<{ listingId: string; title: string; category?: string; subcategory?: string; status: string; message: string; createdAt: string }>;
   sourceUrl?: string;
   importUserEmail?: string;
@@ -198,7 +198,7 @@ export default function AdminDashboard({ adminEmail }: { adminEmail: string }) {
   const [aiReviewerDraft, setAiReviewerDraft] = useState<AiReviewerDraft | null>(null);
   const [aiReviewerAnalysis, setAiReviewerAnalysis] = useState<AiReviewerAnalysis | null>(null);
   const [aiReviewerConfirmation, setAiReviewerConfirmation] = useState<{ action: string; count: number } | null>(null);
-  const [listingImportUrl, setListingImportUrl] = useState("");
+  const [listingImportUrl, setListingImportUrl] = useState("https://ow7hfhirtmiiw.kimi.page/data/api.json");
   const [listingImport, setListingImport] = useState<ListingImportState>({ job: null, logs: [] });
   const [listingImportBusy, setListingImportBusy] = useState(false);
   const [pagbankToken, setPagbankToken] = useState("");
@@ -291,7 +291,7 @@ export default function AdminDashboard({ adminEmail }: { adminEmail: string }) {
         if (typeof data.googleKeyHint === "string") setGoogleMapsKeyHint(data.googleKeyHint);
         if (typeof data.mapboxKeyHint === "string") setMapboxKeyHint(data.mapboxKeyHint);
       }).catch(() => undefined);
-      fetch("/api/admin/listing-import").then((response) => response.json()).then((data) => { if (data && "job" in data) { setListingImport(data); if (typeof data.sourceUrl === "string") setListingImportUrl(data.sourceUrl); } }).catch(() => undefined);
+      fetch("/api/admin/listing-import").then((response) => response.json()).then((data) => { if (data && "job" in data) { setListingImport(data); if (typeof data.sourceUrl === "string" && data.sourceUrl) setListingImportUrl(data.sourceUrl); } }).catch(() => undefined);
       fetch("/api/admin/news-settings").then((response) => response.json()).then((data) => { if (typeof data.wordpressApi === "string" && data.wordpressApi) setWordpressApi(data.wordpressApi); }).catch(() => undefined);
       fetch("/api/admin/verification-settings").then((response) => response.json()).then((data) => {
         if (data.configured && typeof data.configured === "object") setConfiguredVerification(data.configured);
@@ -642,24 +642,6 @@ export default function AdminDashboard({ adminEmail }: { adminEmail: string }) {
       if (!response.ok || !data.job) throw new Error(data.error || "Não foi possível iniciar a importação.");
       setListingImport(data); await continueListingImport(data.job.id);
     } catch (error) { setOpenAiStatus(error instanceof Error ? error.message : "Não foi possível iniciar a importação."); setListingImportBusy(false); }
-  }
-
-  async function synchronizeImportedListings() {
-    setListingImportBusy(true);
-    setOpenAiStatus("Sincronizando e publicando os anúncios importados…");
-    try {
-      const response = await fetch("/api/admin/listing-import", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "synchronize" }) });
-      const data = await response.json() as { synchronized?: number; error?: string };
-      if (!response.ok) throw new Error(data.error || "Não foi possível sincronizar os anúncios.");
-      setOpenAiStatus(`${data.synchronized || 0} anúncios importados classificados e publicados.`);
-      const listingsResponse = await fetch("/api/listings?fresh=1");
-      const listingsPayload = await listingsResponse.json();
-      if (Array.isArray(listingsPayload.data)) setListings(listingsPayload.data.map((item: Record<string, unknown>) => ({ id: String(item.slug || item.id), title: String(item.title), category: migrateCategoryName(String(item.category)), location: String(item.locationLabel), price: Number(item.price || 0), priceLabel: String(item.formattedPrice), image: String(item.coverImage || "/favicon.svg"), age: "Sincronizado", description: String(item.description || "") })));
-    } catch (error) {
-      setOpenAiStatus(error instanceof Error ? error.message : "Não foi possível sincronizar os anúncios.");
-    } finally {
-      setListingImportBusy(false);
-    }
   }
 
   function saveSettings(event: FormEvent<HTMLFormElement>) {
@@ -1886,11 +1868,11 @@ export default function AdminDashboard({ adminEmail }: { adminEmail: string }) {
                     {aiReview.job ? <><div className="ai-review-progress"><div><span style={{ width: `${aiReview.job.total ? Math.round(aiReview.job.processed / aiReview.job.total * 100) : 100}%` }} /></div><small>{aiReview.job.processed} de {aiReview.job.total} · {aiReview.job.changed} reclassificados · {aiReview.job.failed} falhas</small></div><div className="ai-review-log" aria-live="polite">{aiReview.logs.length ? aiReview.logs.map((log) => <article key={`${log.listingId}-${log.createdAt}`} className={log.status === "failed" ? "failed" : ""}><b>{log.title}</b><span>{log.status === "failed" ? `Falha: ${log.message}` : `${log.oldCategory}${log.oldSubcategory ? ` / ${log.oldSubcategory}` : ""} → ${log.newCategory} / ${log.newSubcategory}`}</span><small>{log.message}</small></article>) : <p>O log aparecerá quando o processamento começar.</p>}</div></> : <p className="settings-help">Nenhuma revisão em lote executada.</p>}
                   </section>
                   <section className="ai-import-panel">
-                    <div className="ai-review-head"><div><strong>Sincronização rápida de anúncios</strong><span>Classifica por título, descrição e categoria, publica em lote e não depende da API da OpenAI.</span></div></div>
-                    <label>Link do endereço para importar os anúncios<input type="url" value={listingImportUrl} onChange={(event) => setListingImportUrl(event.target.value)} placeholder="https://exemplo.com/anuncios.json" autoComplete="url" /></label>
-                    <div className="integration-actions"><button type="button" className="soft-button" disabled={listingImportBusy || !listingImportUrl.trim()} onClick={() => listingImport.job?.status === "running" ? continueListingImport(listingImport.job.id) : startListingImport()}>{listingImportBusy ? "Sincronizando…" : listingImport.job?.status === "running" ? "Continuar sincronização" : "Importar e publicar"}</button><button type="button" className="primary-button" disabled={listingImportBusy} onClick={synchronizeImportedListings}>Sincronizar anúncios existentes</button></div>
-                    <small className="settings-help">Usuário responsável: {listingImport.importUserEmail || "importacao@balcao.com"}</small>
-                    {listingImport.job ? <><div className="ai-review-progress"><div><span style={{ width: `${listingImport.job.total ? Math.round(listingImport.job.processed / listingImport.job.total * 100) : 100}%` }} /></div><small>{listingImport.job.processed} de {listingImport.job.total} · {listingImport.job.imported} importados · {listingImport.job.updated} atualizados · {listingImport.job.failed} falhas</small></div><div className="ai-review-log" aria-live="polite">{listingImport.logs.length ? listingImport.logs.map((log) => <article key={`${log.listingId}-${log.createdAt}`} className={log.status === "failed" ? "failed" : ""}><b>{log.title}</b><span>{log.status === "failed" ? "Falha na importação" : `${log.category || ""}${log.subcategory ? ` / ${log.subcategory}` : ""}`}</span><small>{log.message}</small></article>) : <p>O log aparecerá quando a importação começar.</p>}</div></> : <p className="settings-help">Nenhuma importação executada.</p>}
+                    <div className="ai-review-head"><div><strong>Importação única do Jornal Balcão</strong><span>Importa os anúncios publicados para o portal, atualiza registros repetidos e desativa itens externos ausentes da fonte.</span></div></div>
+                    <label>Endereço JSON da importação<input type="url" value={listingImportUrl} onChange={(event) => setListingImportUrl(event.target.value)} placeholder="https://exemplo.com/anuncios.json" autoComplete="url" /></label>
+                    <div className="integration-actions"><button type="button" className="primary-button" disabled={listingImportBusy || !listingImportUrl.trim()} onClick={() => listingImport.job?.status === "running" ? continueListingImport(listingImport.job.id) : startListingImport()}>{listingImportBusy ? "Importando…" : listingImport.job?.status === "running" ? "Continuar importação" : "Executar importação única"}</button></div>
+                    <small className="settings-help">Usuário responsável: {listingImport.importUserEmail || "importacao@balcao.com"}. A operação não cria sincronização automática.</small>
+                    {listingImport.job ? <><div className="ai-review-progress"><div><span style={{ width: `${listingImport.job.total ? Math.round(listingImport.job.processed / listingImport.job.total * 100) : 100}%` }} /></div><small>{listingImport.job.processed} de {listingImport.job.total} · {listingImport.job.imported} importados · {listingImport.job.updated} atualizados · {listingImport.job.deactivated || 0} desativados · {listingImport.job.failed} falhas</small></div><div className="ai-review-log" aria-live="polite">{listingImport.logs.length ? listingImport.logs.map((log) => <article key={`${log.listingId}-${log.createdAt}`} className={log.status === "failed" ? "failed" : ""}><b>{log.title}</b><span>{log.status === "failed" ? "Falha na importação" : `${log.category || ""}${log.subcategory ? ` / ${log.subcategory}` : ""}`}</span><small>{log.message}</small></article>) : <p>O log aparecerá quando a importação começar.</p>}</div></> : <p className="settings-help">Nenhuma importação executada.</p>}
                   </section>
                 </form>
                 <form className="panel-card admin-form verification-settings-form" onSubmit={async (event) => {

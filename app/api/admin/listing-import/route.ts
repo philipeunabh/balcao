@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getAdminFromRequest } from "../../../../db/admin-auth";
-import { getListingImport, processListingImportBatch, startListingImport, synchronizeImportedListings } from "../../../../db/listing-import";
+import { getListingImport, processListingImportBatch, startListingImport } from "../../../../db/listing-import";
 import { readPortalSettings } from "../../../../db/settings";
 import { portalCategories } from "../../../categories";
 
@@ -23,7 +23,6 @@ export async function POST(request: Request) {
   try {
     if (payload.action === "start" && payload.sourceUrl) return NextResponse.json(await startListingImport(payload.sourceUrl));
     if (payload.action === "process" && payload.jobId) return NextResponse.json(await processListingImportBatch(payload.jobId, configuredCategories(await readPortalSettings())));
-    if (payload.action === "synchronize") return NextResponse.json(await synchronizeImportedListings(configuredCategories(await readPortalSettings())));
     return NextResponse.json({ error: "Ação inválida." }, { status: 400 });
   } catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "Falha na importação." }, { status: 400 }); }
 }
