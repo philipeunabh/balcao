@@ -1,0 +1,1 @@
+ALTER TABLE `portal_listings` ADD `expires_at` text;
