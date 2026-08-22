@@ -90,10 +90,10 @@ export async function listStoredListings(includePending = false, limit?: number)
     const now = new Date().toISOString();
     await env.DB.batch([
       env.DB.prepare(`UPDATE portal_listings SET status='active', updated_at=? WHERE status <> 'active' AND user_id IN
-        (SELECT id FROM portal_users WHERE lower(email) IN (lower('importacao@balcao.com'), lower('importacao@palcao.com.br')))`)
+        (SELECT id FROM portal_users WHERE lower(email) IN (lower('importacao@balcao.com'), lower('importacao@balcao.com.br'), lower('importacao@palcao.com.br')))`)
         .bind(now),
       env.DB.prepare(`UPDATE portal_users SET active_ads=(SELECT COUNT(*) FROM portal_listings WHERE user_id=portal_users.id), updated_at=?
-        WHERE lower(email) IN (lower('importacao@balcao.com'), lower('importacao@palcao.com.br'))`).bind(now),
+        WHERE lower(email) IN (lower('importacao@balcao.com'), lower('importacao@balcao.com.br'), lower('importacao@palcao.com.br'))`).bind(now),
     ]);
   }
   const safeLimit = Number.isInteger(limit) ? Math.min(Math.max(Number(limit), 1), 1000) : null;
@@ -101,6 +101,25 @@ export async function listStoredListings(includePending = false, limit?: number)
     : `SELECT ${selectColumns()} FROM portal_listings WHERE status = 'active' ORDER BY created_at DESC${safeLimit ? " LIMIT ?" : ""}`;
   const statement = env.DB.prepare(query);
   return (await (safeLimit ? statement.bind(safeLimit) : statement).all<StoredListing>()).results;
+}
+
+export async function listImportedVehicleListings(limit = 40) {
+  const { env } = await import("cloudflare:workers");
+  await ensureListingTables();
+  const safeLimit = Math.min(Math.max(Math.trunc(limit), 5), 100);
+  return (await env.DB.prepare(`SELECT ${selectColumns()} FROM portal_listings
+    WHERE status = 'active'
+      AND user_id IN (
+        SELECT id FROM portal_users
+        WHERE lower(email) IN (lower('importacao@balcao.com'), lower('importacao@balcao.com.br'), lower('importacao@palcao.com.br'))
+      )
+      AND (
+        lower(category) IN ('veiculos', 'veículos', 'autos', 'auto')
+        OR lower(category) LIKE '%veicul%'
+        OR lower(category) LIKE '%veícul%'
+      )
+    ORDER BY created_at DESC
+    LIMIT ?`).bind(safeLimit).all<StoredListing>()).results;
 }
 
 export async function findStoredListingById(id: string, includePending = false) {

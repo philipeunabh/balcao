@@ -127,7 +127,7 @@ function RotatingRail({ title, items, favorites, toggleFavorite, href, badgeLabe
     <section className={`content-section rotating-rail ${videoMode ? "video-rail" : ""}`.trim()} id={videoMode ? "itatiaia-anunciou-vendeu" : undefined}>
       <div className={`section-heading ${videoMode ? "video-rail-heading" : ""}`.trim()}><h2>{title}</h2>{videoMode ? <span>Vídeos patrocinados</span> : <a href={href}>Ver todos ›</a>}</div>
       {visible.length ? (
-        <div className="rail-body">
+        <div className={`rail-body ${canRotate ? "is-rotating" : "rail-body-static"}`}>
           {canRotate ? <button className="rail-arrow rail-arrow-previous" type="button" onClick={() => setCycle((current) => current - 1)} aria-label={`Ver anúncios anteriores de ${title}`}>‹</button> : null}
           <div className="listing-grid">
             {visible.map((item, index) => videoMode

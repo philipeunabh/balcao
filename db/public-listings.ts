@@ -2,6 +2,7 @@ import { readListingAiOverrides } from "./ai-review";
 import {
   findStoredListingById,
   getListingSellerProfiles,
+  listImportedVehicleListings,
   listStoredListings,
   type ListingSellerProfile,
   type StoredListing,
@@ -84,7 +85,7 @@ function normalizeStored(row: StoredListing, profile?: ListingSellerProfile): Pu
       name: row.displayName || profile?.name,
       avatar: profile?.profileImageUrl || undefined,
     },
-    imported: ["importacao@balcao.com", "importacao@palcao.com.br"].includes((profile?.email || "").toLowerCase()),
+    imported: ["importacao@balcao.com", "importacao@balcao.com.br", "importacao@palcao.com.br"].includes((profile?.email || "").toLowerCase()),
   };
 }
 
@@ -159,12 +160,17 @@ export async function getHomeListings(options: { regularLimit?: number; storeLim
   const regularLimit = Math.min(Math.max(options.regularLimit || 140, 20), 400);
   const storeLimit = Math.min(Math.max(options.storeLimit || 30, 1), 100);
   try {
-    const [stored, storeRows] = await Promise.all([
-      listStoredListings(false, regularLimit),
+    // Ativa primeiro as importações técnicas; depois busca uma amostra própria
+    // de veículos para que a linha da home não dependa da distribuição das
+    // categorias entre os anúncios gerais mais recentes.
+    const stored = await listStoredListings(false, regularLimit);
+    const [importedVehicles, storeRows] = await Promise.all([
+      listImportedVehicleListings(),
       listActiveStoreListingsForPortal(storeLimit),
     ]);
-    const profiles = await getListingSellerProfiles(stored.map((listing) => listing.userId));
-    const regular = await applyOverrides(stored.map((listing) => normalizeStored(listing, profiles.get(listing.userId))));
+    const combined = [...new Map([...stored, ...importedVehicles].map((listing) => [listing.id, listing])).values()];
+    const profiles = await getListingSellerProfiles(combined.map((listing) => listing.userId));
+    const regular = await applyOverrides(combined.map((listing) => normalizeStored(listing, profiles.get(listing.userId))));
     const data = orderListings([...regular, ...storeRows.map(normalizeStoreListing)]).map(coverOnly);
     homeCache = { data, expiresAt: Date.now() + 60_000 };
     return data;

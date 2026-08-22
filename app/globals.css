@@ -2437,6 +2437,8 @@ img.customer-avatar { display: block; object-fit: cover; }
 }
 .rail-body { display: grid; grid-template-columns: 42px minmax(0, 1fr) 42px; align-items: center; gap: 12px; }
 .rail-body > .listing-grid { grid-column: 2; }
+.rail-body-static { grid-template-columns: minmax(0, 1fr); gap: 0; }
+.rail-body-static > .listing-grid { grid-column: 1; }
 .rail-arrow { width: 42px; height: 42px; padding: 0; z-index: 8; display: grid; place-items: center; border: 1px solid #d7dade; border-radius: 50%; color: #22262c; background: rgba(255,255,255,.98); box-shadow: 0 8px 22px rgba(17,19,24,.15); font-size: 30px; line-height: 1; cursor: pointer; }
 .rail-arrow:hover { color: #fff; border-color: var(--red); background: var(--red); }
 .rail-arrow-previous { grid-column: 1; grid-row: 1; }
