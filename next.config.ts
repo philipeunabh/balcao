@@ -5,6 +5,7 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   compress: true,
+  allowedDevOrigins: ["*.v0.build", "*.v0.dev", "*.vusercontent.net"],
   serverExternalPackages: ["postgres", "nodemailer"],
   webpack(config, { webpack }) {
     config.resolve.alias["cloudflare:workers"] = path.resolve(
