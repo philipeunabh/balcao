@@ -448,3 +448,24 @@ export const portalNewsletterCampaigns = sqliteTable("portal_newsletter_campaign
   createdAt: text("created_at").notNull(),
   sentAt: text("sent_at"),
 }, (table) => [index("portal_newsletter_campaigns_created_idx").on(table.createdAt)]);
+
+export const portalLegalPublications = sqliteTable("portal_legal_publications", {
+  id: text("id").primaryKey(),
+  source: text("source").notNull().default("manual"),
+  sourceId: text("source_id"),
+  title: text("title").notNull(),
+  body: text("body").notNull().default(""),
+  filename: text("filename").notNull(),
+  pdfUrl: text("pdf_url").notNull(),
+  pdfKey: text("pdf_key"),
+  originalPdfUrl: text("original_pdf_url"),
+  imagesJson: text("images_json").notNull().default("[]"),
+  sourcePostUrl: text("source_post_url"),
+  publishedAt: text("published_at").notNull(),
+  status: text("status").notNull().default("active"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+}, (table) => [
+  uniqueIndex("portal_legal_publications_source_idx").on(table.source, table.sourceId),
+  index("portal_legal_publications_published_idx").on(table.status, table.publishedAt),
+]);

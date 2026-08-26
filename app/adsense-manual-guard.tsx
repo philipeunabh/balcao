@@ -48,19 +48,25 @@ function removeAutomaticAds() {
 
 export default function AdSenseManualGuard() {
   useEffect(() => {
+    const client = document.body.dataset.adsenseClient || "";
+    if (!/^ca-pub-\d{10,30}$/.test(client)) return;
+
     removeAutomaticAds();
-    const observer = new MutationObserver(removeAutomaticAds);
-    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "id", "style", "data-anchor-status"] });
-    const repeatedCheck = window.setInterval(removeAutomaticAds, 750);
-    const stopRepeatedCheck = window.setTimeout(() => window.clearInterval(repeatedCheck), 15_000);
+    let frame = 0;
+    const scheduleCheck = () => {
+      if (frame) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = 0;
+        removeAutomaticAds();
+      });
+    };
+    const observer = new MutationObserver(scheduleCheck);
+    observer.observe(document.body, { childList: true, subtree: true });
     window.addEventListener("pageshow", removeAutomaticAds);
-    window.addEventListener("scroll", removeAutomaticAds, { passive: true });
     return () => {
       observer.disconnect();
-      window.clearInterval(repeatedCheck);
-      window.clearTimeout(stopRepeatedCheck);
+      if (frame) window.cancelAnimationFrame(frame);
       window.removeEventListener("pageshow", removeAutomaticAds);
-      window.removeEventListener("scroll", removeAutomaticAds);
     };
   }, []);
 

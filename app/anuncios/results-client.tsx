@@ -23,6 +23,7 @@ const priceOptions = [100, 200, 300, 400, 500, 1000, 2000, 5000, 10000, 50000, 1
 const priceLabel = (value: number) => value.toLocaleString("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 0 });
 const listingState = (location: string) => location.match(/\b(MG|SP|RJ|ES|BA|PR|SC|RS|GO|DF|PE|CE)\b/i)?.[1]?.toUpperCase() || "";
 const listingCity = (location: string) => location.split(/[,\-]/)[0]?.trim() || "";
+const normalizedSearch = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 const INITIAL_RESULTS_SIZE = 18;
 const MORE_RESULTS_SIZE = 10;
 
@@ -182,8 +183,11 @@ export default function ResultsPage() {
     const sourceItems = videoOnly
       ? [...itatiaiaVideoListings, ...items.filter((item) => !itatiaiaVideoListings.some((video) => video.id === item.id) && !item.id.startsWith("video-demo-"))]
       : items;
+    const searchTerms = normalizedSearch(search).split(/\s+/).filter(Boolean);
     const filtered = sourceItems.filter(
-      (item) =>
+      (item) => {
+        const searchable = normalizedSearch(`${item.title} ${item.description} ${item.category} ${item.subcategory || ""} ${item.location}`);
+        return (
         (!videoOnly || Boolean(item.videoUrl)) &&
         (category === "Todas" ||
           item.category === category ||
@@ -197,9 +201,7 @@ export default function ResultsPage() {
             (!genericCity || listingCity(item.location) === genericCity) &&
             (!genericMinPrice || item.price >= Number(genericMinPrice)) &&
             (!genericMaxPrice || item.price <= Number(genericMaxPrice)))) &&
-        `${item.title} ${item.location}`
-          .toLowerCase()
-          .includes(search.toLowerCase()) &&
+        searchTerms.every((term) => searchable.includes(term)) &&
         (!isVehicles ||
           ((!vehicleDraft.type || item.vehicle?.type === vehicleDraft.type) &&
             (!vehicleDraft.brand ||
@@ -230,7 +232,9 @@ export default function ResultsPage() {
           (!propertyDraft.minPrice || item.price >= moneyNumber(propertyDraft.minPrice)) &&
           (!propertyDraft.maxPrice || item.price <= moneyNumber(propertyDraft.maxPrice)) &&
           (!propertyDraft.query || `${item.title} ${item.description} ${item.location} ${item.property?.address || ""}`.toLocaleLowerCase("pt-BR").includes(propertyDraft.query.toLocaleLowerCase("pt-BR"))) &&
-          propertyDraft.features.every((feature) => item.property?.features?.includes(feature)))),
+          propertyDraft.features.every((feature) => item.property?.features?.includes(feature))))
+        );
+      },
     );
     const priority = (item: (typeof filtered)[number]) => /super|ultra/i.test(`${item.publicationType || ""} ${item.featuredPlan || ""}`) ? 3 : item.featured || item.publicationType === "featured" || Boolean(item.featuredPlan) ? 2 : item.storeListing ? 1 : 0;
     return [...filtered].sort((a, b) => {

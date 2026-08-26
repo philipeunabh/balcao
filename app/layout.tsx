@@ -1,11 +1,9 @@
 import type { Metadata, Viewport } from "next";
-/* eslint-disable @next/next/no-page-custom-font */
 import "./globals.css";
 import PwaRegister from "./pwa-register";
 import AnalyticsTracker from "./analytics-tracker";
 import AdSenseManualGuard from "./adsense-manual-guard";
-import AiChatWidget from "./ai-chat-widget";
-import NewsletterExperience from "./newsletter-experience";
+import DeferredGlobalExperience from "./deferred-global-experience";
 import { readPortalSettings } from "../db/settings";
 import { SITE_URL } from "../lib/site-url";
 
@@ -28,7 +26,6 @@ export async function generateMetadata(): Promise<Metadata> {
     description,
     keywords,
     applicationName: "Portal Balcão",
-    other: { "codex-preview": "development" },
     authors: [{ name: "Portal Balcão", url: SITE_URL }],
     creator: "Portal Balcão",
     publisher: "Portal Balcão",
@@ -71,17 +68,13 @@ export default async function RootLayout({
   return (
     <html lang="pt-BR">
       <head>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
         {schemaEnabled ? <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData).replace(/</g, "\\u003c") }} /> : null}
       </head>
       <body className="antialiased" data-adsense-client={adsenseClient || undefined} data-adsense-slot={adsenseSlot || undefined}>
         <AdSenseManualGuard />
         <AnalyticsTracker measurementId={analyticsId} />
         {children}
-        <AiChatWidget />
-        <NewsletterExperience />
+        <DeferredGlobalExperience />
         <PwaRegister />
       </body>
     </html>

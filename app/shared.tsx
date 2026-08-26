@@ -451,17 +451,53 @@ function InstantSearch({ initialListings }: { initialListings?: PortalListing[] 
   const items = initialListings?.length ? initialListings : bootstrapped || loadedItems;
   const [query, setQuery] = useState("");
   const [focused, setFocused] = useState(false);
-  const results = useMemo(() => {
-    const term = query.trim().toLocaleLowerCase("pt-BR");
-    if (term.length < 2) return [];
+  const [remoteResults, setRemoteResults] = useState<PortalListing[]>([]);
+  const [remoteQuery, setRemoteQuery] = useState("");
+  const [searching, setSearching] = useState(false);
+  const normalizedQuery = useMemo(() => query.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase(), [query]);
+  const localResults = useMemo(() => {
+    if (normalizedQuery.length < 2) return [];
+    const terms = normalizedQuery.split(/\s+/).filter(Boolean);
     return items
-      .filter((item) =>
-        `${item.title} ${item.description}`
-          .toLocaleLowerCase("pt-BR")
-          .includes(term),
-      )
+      .filter((item) => {
+        const content = `${item.title} ${item.description} ${item.category} ${item.subcategory || ""} ${item.location}`
+          .normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+        return terms.every((term) => content.includes(term));
+      })
       .slice(0, 5);
-  }, [items, query]);
+  }, [items, normalizedQuery]);
+  useEffect(() => {
+    if (normalizedQuery.length < 2) {
+      queueMicrotask(() => {
+        setRemoteResults([]);
+        setRemoteQuery("");
+        setSearching(false);
+      });
+      return;
+    }
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      setSearching(true);
+      fetch(`/api/listings?search=${encodeURIComponent(query.trim())}&limit=5`, { signal: controller.signal })
+        .then((response) => response.ok ? response.json() : Promise.reject())
+        .then((payload: { data?: ApiListing[] }) => {
+          setRemoteResults(Array.isArray(payload.data) ? payload.data.map(fromApi) : []);
+          setRemoteQuery(normalizedQuery);
+        })
+        .catch(() => {
+          if (!controller.signal.aborted) {
+            setRemoteResults([]);
+            setRemoteQuery(normalizedQuery);
+          }
+        })
+        .finally(() => { if (!controller.signal.aborted) setSearching(false); });
+    }, 180);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [normalizedQuery, query]);
+  const results = remoteQuery === normalizedQuery ? remoteResults : localResults;
   const open = focused && query.trim().length >= 2;
   return (
     <div className="instant-search">
@@ -472,7 +508,13 @@ function InstantSearch({ initialListings }: { initialListings?: PortalListing[] 
           onChange={(event) => setQuery(event.target.value)}
           onFocus={() => setFocused(true)}
           onBlur={() => window.setTimeout(() => setFocused(false), 160)}
+          onKeyDown={(event) => { if (event.key === "Escape") setFocused(false); }}
           autoComplete="off"
+          enterKeyHint="search"
+          aria-expanded={open}
+          aria-controls="instant-search-results"
+          aria-autocomplete="list"
+          role="combobox"
           aria-label="Buscar em títulos e descrições"
           placeholder="O que você procura?"
         />
@@ -483,10 +525,11 @@ function InstantSearch({ initialListings }: { initialListings?: PortalListing[] 
       {open && (
         <div
           className="search-suggestions"
+          id="instant-search-results"
           role="listbox"
           aria-label="Sugestões de anúncios"
         >
-          {results.length ? (
+          {searching && !results.length ? <p role="status">Buscando anúncios…</p> : results.length ? (
             results.map((item) => (
               <a key={item.id} href={item.url || `/anuncio/${item.id}`} role="option" aria-selected="false">
                 <OptimizedImage
@@ -598,18 +641,20 @@ export function PortalHeader({ initialListings }: { initialListings?: PortalList
         </button>
         <MiniLogo />
         <InstantSearch initialListings={initialListings} />
-        <a className="top-phone" href="tel:+553133309600" aria-label="Ligar para anunciar no Balcão: (31) 3330-9600">
-          <span>Para anunciar, ligue:</span>
-          <strong>(31) 3330-9600</strong>
-        </a>
-        <nav className="top-actions">
-          <a className="soft-button" href="/entrar">
-            Entrar
+        <div className="topbar-actions-group">
+          <a className="top-phone" href="tel:+553133309600" aria-label="Ligar para anunciar no Balcão: (31) 3330-9600">
+            <span>Para anunciar, ligue:</span>
+            <strong>(31) 3330-9600</strong>
           </a>
-          <a className="primary-button create-listing-button" href="/anunciar">
-            Criar anúncio
-          </a>
-        </nav>
+          <nav className="top-actions">
+            <a className="soft-button" href="/entrar">
+              Entrar
+            </a>
+            <a className="primary-button create-listing-button" href="/anunciar">
+              Criar anúncio
+            </a>
+          </nav>
+        </div>
         <a
           className="mobile-add-button"
           href="/anunciar"
@@ -658,6 +703,9 @@ export function PortalHeader({ initialListings }: { initialListings?: PortalList
                 </div>
               </div>
             ))}
+          <a className="nav-direct-link legal-category-link" href="/publicidade-legal">
+            Publicidade Legal
+          </a>
         </div>
       </nav>
     </>
@@ -779,6 +827,7 @@ export function PortalFooter() {
             <a href="/anuncios">Todos os anúncios</a>
             <a href="/videos">Vídeos</a>
             <a href="/ao-vivo">● Ao vivo</a>
+            <a href="/publicidade-legal">Publicidade Legal</a>
             <a href="/anunciar">Anunciar</a>
           </div>
           <div>

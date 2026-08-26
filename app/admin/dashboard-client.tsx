@@ -15,6 +15,8 @@ import {
 } from "../shared";
 import { defaultDiscoverPages, DiscoverPage } from "../discover-data";
 import { createProfilePreview, uploadProfileImage, validateProfileImage } from "../profile-image-client";
+import LegalPublicationsManager from "./legal-publications-manager";
+import { SITE_URL } from "../../lib/site-url";
 
 type AdminUser = {
   id: string;
@@ -54,6 +56,7 @@ type Section =
   | "categorias"
   | "veiculos"
   | "noticias"
+  | "publicidade-legal"
   | "descubra"
   | "banners"
   | "seo"
@@ -238,8 +241,8 @@ export default function AdminDashboard({ adminEmail }: { adminEmail: string }) {
     keywords: "classificados, anúncios, Belo Horizonte, imóveis, veículos, empregos, serviços",
     googleVerification: "",
     schemaEnabled: true,
-    sitemapUrl: "https://jornalbalcao.com.br/sitemap.xml",
-    robotsUrl: "https://jornalbalcao.com.br/robots.txt",
+    sitemapUrl: `${SITE_URL}/sitemap.xml`,
+    robotsUrl: `${SITE_URL}/robots.txt`,
   });
   const [seoBusy, setSeoBusy] = useState(false);
   const [seoStatus, setSeoStatus] = useState("");
@@ -789,6 +792,7 @@ export default function AdminDashboard({ adminEmail }: { adminEmail: string }) {
     { id: "categorias", label: "Categorias", icon: "▦" },
     { id: "veiculos", label: "Marcas e modelos FIPE", icon: "◆" },
     { id: "noticias", label: "Últimas notícias", icon: "▤" },
+    { id: "publicidade-legal", label: "Publicidade Legal", icon: "▧" },
     { id: "descubra", label: "Páginas Descubra", icon: "▧" },
     { id: "banners", label: "Banners", icon: "▣" },
     { id: "seo", label: "SEO, Analytics e Cloudflare", icon: "◎" },
@@ -848,6 +852,7 @@ export default function AdminDashboard({ adminEmail }: { adminEmail: string }) {
         </header>
         <div className="dash-content">
           {notice && <div className="admin-notice">✓ {notice}</div>}
+          {section === "publicidade-legal" && <LegalPublicationsManager />}
           {section === "veiculos" && (
             <section className="admin-section vehicle-admin">
               <div className="admin-section-head">

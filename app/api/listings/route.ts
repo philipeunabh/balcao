@@ -15,21 +15,48 @@ import { createListingInvoice } from "../../../db/invoices";
 
 type UnknownRecord = Record<string, unknown>;
 function text(value: unknown) { return typeof value === "string" ? value.trim() : value == null ? "" : String(value); }
+function searchText(value: string) { return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase(); }
 export async function GET(request: Request) {
   const includePending = Boolean(await getAdminFromRequest(request));
   const url = new URL(request.url);
   const fresh = url.searchParams.get("fresh") === "1";
   const homeView = !includePending && url.searchParams.get("view") === "home";
+  const query = text(url.searchParams.get("search") || url.searchParams.get("busca")).slice(0, 120);
   let listings = homeView
     ? await getHomeListings({ regularLimit: 180, storeLimit: 30, fresh })
     : await getPublicListings({ includePending, fresh });
+  if (query) {
+    const phrase = searchText(query);
+    const terms = [...new Set(phrase.replace(/[^a-z0-9\s-]/g, " ").split(/\s+/).filter((term) => term.length >= 2))].slice(0, 8);
+    const score = (item: (typeof listings)[number]) => {
+      const title = searchText(item.title);
+      const category = searchText(`${item.category} ${item.subcategory}`);
+      const details = searchText(`${item.description} ${item.locationLabel}`);
+      let value = phrase.length >= 2 && title.includes(phrase) ? 100 : 0;
+      for (const term of terms) {
+        if (title === term) value += 45;
+        else if (title.startsWith(term)) value += 28;
+        else if (title.includes(term)) value += 18;
+        if (category.includes(term)) value += 9;
+        if (details.includes(term)) value += 4;
+      }
+      if (item.featured) value += 3;
+      return value;
+    };
+    const limit = Math.min(10, Math.max(1, Number(url.searchParams.get("limit") || 5) || 5));
+    listings = listings.map((item) => ({ item, score: score(item) }))
+      .filter(({ score }) => score > 0)
+      .sort((a, b) => b.score - a.score || Date.parse(b.item.createdAt || "") - Date.parse(a.item.createdAt || ""))
+      .slice(0, limit)
+      .map(({ item }) => item);
+  }
   if (includePending) {
     const metadata = await getAdminListingMetadata(listings.map((item) => item.id));
     listings = listings.map((item) => ({ ...item, seller: { ...item.seller, ...metadata.get(item.id), email: metadata.get(item.id)?.sellerEmail }, analytics: metadata.get(item.id) }));
   }
   return NextResponse.json(
     { data: listings, total: listings.length, source: "database" },
-    { headers: { "Cache-Control": includePending || fresh ? "no-store" : "public, max-age=60, s-maxage=300, stale-while-revalidate=86400" } },
+    { headers: { "Cache-Control": includePending || fresh ? "no-store" : query ? "public, max-age=30, s-maxage=60" : "public, max-age=60, s-maxage=300, stale-while-revalidate=86400" } },
   );
 }
 function optionalCents(value: unknown) { if (value === null || value === undefined || value === "") return null; const number = Number(value); return Number.isInteger(number) && number >= 0 ? number : null; }

@@ -54,7 +54,11 @@ export async function POST(request: Request) {
     nextAction = customer ? null : "listing";
     reply = customer ? "Preencha o formulário abaixo. Ao final, você poderá escolher anúncio grátis, destacado ou super destacado." : "Primeiro vou validar CPF, e-mail e celular/WhatsApp. Se a conta já existir, basta confirmar a senha; se não existir, o cadastro será criado antes de abrir o formulário do anúncio.";
   } else {
-    listings = await searchAiChatListings(message, 5);
+    try {
+      listings = await searchAiChatListings(message, 5);
+    } catch {
+      listings = [];
+    }
     if (listings.length) {
       intent = "search";
       reply = `Encontrei ${listings.length} anúncio${listings.length === 1 ? "" : "s"} relacionado${listings.length === 1 ? "" : "s"}. Confira os resultados abaixo.`;

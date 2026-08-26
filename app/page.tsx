@@ -19,14 +19,13 @@ function belongsToHomeRail(item: Awaited<ReturnType<typeof getHomeListings>>[num
 
 export default async function HomePage() {
   const listings = await getHomeListings({ regularLimit: 100, storeLimit: 12 });
-  const railCategories = ["Veículos", "Imóveis", "Empregos", "Comércio e Negócios", "Informática", "Animais"];
   const videoListings = listings.filter((item) => typeof item.attributes?.videoUrl === "string" && item.attributes.videoUrl.trim().length > 0);
   const homeListings = [...new Map([
     ...videoListings.slice(0, 8),
-    ...listings.filter((item) => item.featured).slice(0, 10),
-    ...railCategories.flatMap((category) => listings.filter((item) => belongsToHomeRail(item, category)).slice(0, 7)),
-    ...listings.slice(0, 24),
-  ].map((item) => [item.id, item])).values()].slice(0, 64);
+    ...listings.filter((item) => item.featured).slice(0, 8),
+    ...listings.filter((item) => belongsToHomeRail(item, "Veículos")).slice(0, 7),
+    ...listings.slice(0, 20),
+  ].map((item) => [item.id, item])).values()].slice(0, 40);
   const structuredData = {
     "@context": "https://schema.org",
     "@graph": [

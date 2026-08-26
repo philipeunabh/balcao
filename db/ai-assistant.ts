@@ -1,4 +1,4 @@
-import { ensureStoreTables } from "./stores";
+import { getPublicListings, type PublicListing } from "./public-listings";
 
 export type AiChatMessage = {
   id: string;
@@ -96,37 +96,54 @@ function safeJson(value: string) {
 }
 
 const stopWords = new Set(["tem", "voce", "voces", "algum", "alguma", "quero", "procuro", "buscar", "busco", "preciso", "de", "do", "da", "um", "uma", "para", "por", "favor", "anuncio", "anuncios", "disponivel", "disponiveis"]);
+function plain(value: string) {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
 function searchTerms(query: string) {
-  return [...new Set(query.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9\s-]/g, " ").split(/\s+/).filter((term) => term.length >= 2 && !stopWords.has(term)))].slice(0, 4);
+  return [...new Set(plain(query).replace(/[^a-z0-9\s-]/g, " ").split(/\s+/).filter((term) => term.length >= 2 && !stopWords.has(term)))].slice(0, 6);
 }
 
 export async function searchAiChatListings(query: string, limit = 5): Promise<AiChatListingResult[]> {
-  const { env } = await import("cloudflare:workers");
-  await ensureStoreTables();
   const terms = searchTerms(query);
   if (!terms.length) return [];
-  const conditions = terms.map(() => "(lower(title) LIKE ? OR lower(description) LIKE ? OR lower(category) LIKE ? OR lower(subcategory) LIKE ?)").join(" OR ");
-  const bindings = terms.flatMap((term) => Array(4).fill(`%${term}%`));
-  const rows = (await env.DB.prepare(`SELECT id, title, cover_image AS image, price_cents AS priceCents,
-    monthly_rent_cents AS monthlyRentCents, negotiable, negotiation_type AS negotiationType, address, publication_type AS publicationType, payment_status AS paymentStatus
-    FROM portal_listings WHERE status='active' AND (${conditions})
-    ORDER BY CASE WHEN publication_type='super_featured' AND payment_status='paid' THEN 0 WHEN publication_type='featured' AND payment_status='paid' THEN 1 ELSE 3 END, created_at DESC LIMIT ?`)
-    .bind(...bindings, Math.min(5, Math.max(1, limit))).all<{ id: string; title: string; image: string; priceCents: number | null; monthlyRentCents: number | null; negotiable: number; negotiationType: string; address: string; publicationType: string; paymentStatus: string | null }>()).results;
-  const regular = rows.map((row) => {
-    const cents = row.monthlyRentCents ?? row.priceCents;
-    const priceLabel = row.negotiable || cents == null ? "Valor a combinar" : `${(cents / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}${row.negotiationType === "Aluguel" ? "/mês" : ""}`;
-    const promotionLevel = row.paymentStatus === "paid" && row.publicationType === "super_featured" ? "super_featured" as const : row.paymentStatus === "paid" && row.publicationType === "featured" ? "featured" as const : "free" as const;
-    return { id: row.id, title: row.title, image: row.image, priceLabel, location: row.address, url: `/anuncio/${encodeURIComponent(row.id)}`, promotionLevel };
-  });
-  const now = new Date().toISOString();
-  const storeRows = (await env.DB.prepare(`SELECT l.id,l.title,l.cover_image AS image,l.price_cents AS priceCents,l.address,s.id AS storeId,s.slug AS storeSlug
-    FROM portal_store_listings l JOIN portal_virtual_stores s ON s.id=l.store_id
-    WHERE l.status='active' AND s.active=1 AND (s.plan_started_at IS NULL OR s.plan_started_at<=?) AND (s.plan_ends_at IS NULL OR s.plan_ends_at>=?)
-      AND (${conditions.replaceAll("title","l.title").replaceAll("description","l.description").replaceAll("category","l.category").replaceAll("subcategory","l.subcategory")})
-    ORDER BY l.created_at DESC LIMIT ?`).bind(now,now,...bindings,Math.min(5,Math.max(1,limit))).all<{ id:string; title:string; image:string; priceCents:number|null; address:string; storeId:string; storeSlug:string }>()).results;
-  const store = storeRows.map((row) => ({ id:`store:${row.storeId}:${row.id}`,title:row.title,image:row.image,priceLabel:row.priceCents==null?"Valor a combinar":(row.priceCents/100).toLocaleString("pt-BR",{style:"currency",currency:"BRL"}),location:row.address,url:`/loja/${encodeURIComponent(row.storeSlug)}/anuncio/${encodeURIComponent(row.id)}`,promotionLevel:"store" as const }));
-  const rank=(item:AiChatListingResult)=>item.promotionLevel==="super_featured"?3:item.promotionLevel==="featured"?2:item.promotionLevel==="store"?1:0;
-  return [...regular,...store].sort((a,b)=>rank(b)-rank(a)).slice(0,Math.min(5,Math.max(1,limit)));
+  const phrase = plain(query).trim();
+  const listings = await getPublicListings();
+  const score = (listing: PublicListing) => {
+    const title = plain(listing.title);
+    const category = plain(`${listing.category} ${listing.subcategory}`);
+    const details = plain(`${listing.description} ${listing.locationLabel}`);
+    let value = phrase.length >= 2 && title.includes(phrase) ? 80 : 0;
+    for (const term of terms) {
+      if (title === term) value += 40;
+      else if (title.startsWith(term)) value += 24;
+      else if (title.includes(term)) value += 16;
+      if (category.includes(term)) value += 8;
+      if (details.includes(term)) value += 3;
+    }
+    if (listing.publicationType === "super_featured" && listing.paymentStatus === "paid") value += 6;
+    else if (listing.publicationType === "featured" && listing.paymentStatus === "paid") value += 4;
+    else if (listing.storeListing) value += 2;
+    return value;
+  };
+  const safeLimit = Math.min(10, Math.max(1, limit));
+  return listings
+    .map((listing) => ({ listing, score: score(listing) }))
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score || Date.parse(b.listing.createdAt || "") - Date.parse(a.listing.createdAt || ""))
+    .slice(0, safeLimit)
+    .map(({ listing }) => ({
+      id: listing.id,
+      title: listing.title,
+      image: listing.coverImage || listing.images[0] || "/favicon.svg",
+      priceLabel: listing.formattedPrice,
+      location: listing.locationLabel,
+      url: listing.url || `/anuncio/${encodeURIComponent(listing.id)}`,
+      promotionLevel: listing.paymentStatus === "paid" && listing.publicationType === "super_featured"
+        ? "super_featured"
+        : listing.paymentStatus === "paid" && listing.publicationType === "featured"
+          ? "featured"
+          : listing.storeListing ? "store" : "free",
+    }));
 }
 
 export async function listAiChatSessions() {

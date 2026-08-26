@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { defaultDiscoverPages, DiscoverPage } from "./discover-data";
 import { itatiaiaVideoListings } from "./itatiaia-videos";
 import { mapCategory } from "./categories";
@@ -142,7 +142,7 @@ function RotatingRail({ title, items, favorites, toggleFavorite, href, badgeLabe
   );
 }
 
-function MobileLatest({ items }: { items: PortalListing[] }) {
+function MobileLatest({ items, canRequestMore, onNeedMore }: { items: PortalListing[]; canRequestMore: boolean; onNeedMore: () => void }) {
   const [visibleCount, setVisibleCount] = useState(MOBILE_INITIAL_SIZE);
   const [randomCycle, setRandomCycle] = useState(0);
   const lastInteraction = useRef(0);
@@ -176,13 +176,20 @@ function MobileLatest({ items }: { items: PortalListing[] }) {
 
   useEffect(() => {
     const node = loadMoreRef.current;
-    if (!node || visibleCount >= items.length || !("IntersectionObserver" in window)) return;
+    if (!node || !("IntersectionObserver" in window)) return;
     const observer = new IntersectionObserver(([entry]) => {
-      if (entry.isIntersecting) setVisibleCount((current) => Math.min(current + MOBILE_MORE_SIZE, items.length));
+      if (!entry.isIntersecting) return;
+      if (canRequestMore) onNeedMore();
+      if (visibleCount < items.length) setVisibleCount((current) => Math.min(current + MOBILE_MORE_SIZE, items.length));
     }, { rootMargin: "350px 0px" });
     observer.observe(node);
     return () => observer.disconnect();
-  }, [items.length, visibleCount]);
+  }, [canRequestMore, items.length, onNeedMore, visibleCount]);
+
+  const loadMore = () => {
+    if (canRequestMore) onNeedMore();
+    setVisibleCount((current) => Math.min(current + MOBILE_MORE_SIZE, items.length));
+  };
 
   return (
     <section className="mobile-home" aria-label="Anúncios mais recentes">
@@ -202,7 +209,7 @@ function MobileLatest({ items }: { items: PortalListing[] }) {
         })}
       </div>
       <div ref={loadMoreRef} className="mobile-scroll-sentinel" aria-hidden="true" />
-      {visibleCount < items.length ? <button className="mobile-more-results" type="button" onClick={() => setVisibleCount((current) => Math.min(current + MOBILE_MORE_SIZE, items.length))}>Carregar mais</button> : null}
+      {visibleCount < items.length || canRequestMore ? <button className="mobile-more-results" type="button" onClick={loadMore}>Carregar mais</button> : null}
     </section>
   );
 }
@@ -233,6 +240,8 @@ export default function HomeClient() {
   const { items, loading } = useImportedListings();
   const [favorites, setFavorites] = useState<string[]>([]);
   const [deferredItems, setDeferredItems] = useState<PortalListing[]>([]);
+  const [deferredRequested, setDeferredRequested] = useState(false);
+  const deferredLoading = useRef(false);
   const catalogSentinel = useRef<HTMLDivElement>(null);
   const catalog = useMemo(() => [
     ...itatiaiaVideoListings,
@@ -246,20 +255,28 @@ export default function HomeClient() {
     return bTime - aTime;
   }), [catalog]);
 
+  const requestDeferredItems = useCallback(() => {
+    if (deferredLoading.current || deferredRequested) return;
+    deferredLoading.current = true;
+    setDeferredRequested(true);
+    fetch("/api/listings?view=home")
+      .then((response) => response.ok ? response.json() : Promise.reject())
+      .then((payload: { data?: Parameters<typeof fromApi>[0][] }) => setDeferredItems(Array.isArray(payload.data) ? payload.data.map(fromApi) : []))
+      .catch(() => undefined)
+      .finally(() => { deferredLoading.current = false; });
+  }, [deferredRequested]);
+
   useEffect(() => {
     const node = catalogSentinel.current;
-    if (!node || deferredItems.length || !("IntersectionObserver" in window)) return;
+    if (!node || deferredRequested || !("IntersectionObserver" in window)) return;
     const observer = new IntersectionObserver(([entry]) => {
       if (!entry.isIntersecting) return;
       observer.disconnect();
-      fetch("/api/listings?view=home")
-        .then((response) => response.ok ? response.json() : Promise.reject())
-        .then((payload: { data?: Parameters<typeof fromApi>[0][] }) => setDeferredItems(Array.isArray(payload.data) ? payload.data.map(fromApi) : []))
-        .catch(() => undefined);
+      requestDeferredItems();
     }, { rootMargin: "700px 0px" });
     observer.observe(node);
     return () => observer.disconnect();
-  }, [deferredItems.length]);
+  }, [deferredRequested, requestDeferredItems]);
 
   const rails = useMemo(() => {
     const categoryOf = (item: PortalListing) => mapCategory(item.category);
@@ -282,12 +299,12 @@ export default function HomeClient() {
       <PortalHeader />
       <MiartLarBanner className="home-top-banner" priority />
       <div className="mobile-video-showcase">
-        <RotatingRail title="Itatiaia - Anunciou, Vendeu" items={rails.videos} favorites={favorites} toggleFavorite={toggleFavorite} href="/videos" badgeLabel="Vídeo" priorityCount={1} emptyMessage="Nenhum anúncio em vídeo disponível no momento." pageSize={1} videoMode />
+        <RotatingRail title="Itatiaia - Anunciou, Vendeu" items={rails.videos} favorites={favorites} toggleFavorite={toggleFavorite} href="/videos" badgeLabel="Vídeo" emptyMessage="Nenhum anúncio em vídeo disponível no momento." pageSize={1} videoMode />
       </div>
-      <MobileLatest items={sorted} />
+      <MobileLatest items={sorted} canRequestMore={!deferredRequested} onNeedMore={requestDeferredItems} />
       <div className="page-shell desktop-home">
         {loading ? <p className="home-loading" role="status">Carregando anúncios…</p> : null}
-        <RotatingRail title="Itatiaia - Anunciou, Vendeu" items={rails.videos} favorites={favorites} toggleFavorite={toggleFavorite} href="/anuncios?video=1" badgeLabel="Vídeo" priorityCount={2} emptyMessage="Nenhum anúncio em vídeo disponível no momento." pageSize={4} videoMode />
+        <RotatingRail title="Itatiaia - Anunciou, Vendeu" items={rails.videos} favorites={favorites} toggleFavorite={toggleFavorite} href="/anuncios?video=1" badgeLabel="Vídeo" emptyMessage="Nenhum anúncio em vídeo disponível no momento." pageSize={4} videoMode />
         <RotatingRail title="Veículos" items={rails.vehicles} favorites={favorites} toggleFavorite={toggleFavorite} href="/anuncios?categoria=Ve%C3%ADculos" />
         <div ref={catalogSentinel} className="home-catalog-sentinel" aria-hidden="true" />
         <DeferredSection><RotatingRail title="Imóveis" items={rails.properties} favorites={favorites} toggleFavorite={toggleFavorite} href="/anuncios?categoria=Im%C3%B3veis" /></DeferredSection>

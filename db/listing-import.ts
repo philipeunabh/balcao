@@ -1,22 +1,23 @@
 import type { PortalCategory } from "../app/categories";
-import { mapCategory } from "../app/categories";
+import { mapCategory, portalCategories } from "../app/categories";
 import { ensureImportCustomer, IMPORT_ACCOUNT_EMAIL } from "./customer-auth";
 import { ensureListingTables } from "./listings";
 import { writePortalSettings } from "./settings";
 
-type UnknownRecord = Record<string, unknown>;
-type ImportRecord = {
+export type UnknownListingSourceRecord = Record<string, unknown>;
+export type ImportRecord = {
   id: string; title: string; description: string; category: string; subcategory: string;
   priceCents: number | null; negotiable: boolean; images: string[]; displayName: string; whatsapp: string;
+  createdAt: string; sourceId: string; sourceUrl: string; sourceCategories: string[];
 };
 
 function text(value: unknown) { return typeof value === "string" ? value.trim() : value == null ? "" : String(value); }
-function first(source: UnknownRecord, keys: string[]) { for (const key of keys) if (source[key] != null && source[key] !== "") return source[key]; }
+function first(source: UnknownListingSourceRecord, keys: string[]) { for (const key of keys) if (source[key] != null && source[key] !== "") return source[key]; }
 function slug(value: string, index: number) { return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 100) || `anuncio-${index + 1}`; }
-function imageUrls(source: UnknownRecord) {
+function imageUrls(source: UnknownListingSourceRecord) {
   const list = first(source, ["images", "imagens", "fotos", "photos"]);
   return [first(source, ["image", "imagem", "coverImage", "foto", "thumbnail", "capa"]), ...(Array.isArray(list) ? list : [])]
-    .map((value) => typeof value === "object" && value ? text(first(value as UnknownRecord, ["url", "src", "image"])) : text(value))
+    .map((value) => typeof value === "object" && value ? text(first(value as UnknownListingSourceRecord, ["url", "src", "image"])) : text(value))
     .filter((value, index, values) => /^https?:\/\//i.test(value) && values.indexOf(value) === index).slice(0, 12);
 }
 function priceCents(value: unknown) {
@@ -25,23 +26,84 @@ function priceCents(value: unknown) {
   const decimal = raw.includes(",") ? raw.replace(/\./g, "").replace(",", ".") : raw;
   const parsed = Number(decimal); return Number.isFinite(parsed) ? Math.max(0, Math.round(parsed * 100)) : null;
 }
-function normalize(source: UnknownRecord, index: number): ImportRecord | null {
+function sourceCategories(source: UnknownListingSourceRecord) {
+  const value = first(source, ["categories", "categorias", "categoryPath", "taxonomy"]);
+  const list = Array.isArray(value) ? value.map(text).filter(Boolean) : text(value) ? [text(value)] : [];
+  const singular = text(first(source, ["category", "categoria", "categoryName"]));
+  if (singular && !list.some((item) => plain(item) === plain(singular))) list.push(singular);
+  return list;
+}
+
+function sourceCategory(labels: string[], title: string) {
+  for (const label of labels) {
+    const exact = portalCategories.find((category) => plain(category.name) === plain(label));
+    if (exact) return exact.name;
+  }
+  for (const label of [...labels].reverse()) {
+    const mapped = mapCategory(label, title);
+    if (mapped !== "Outros") return mapped;
+  }
+  return mapCategory(labels.join(" "), title);
+}
+
+function sourceSubcategory(category: string, labels: string[]) {
+  const remaining = labels.filter((label) => plain(label) !== plain(category));
+  const joined = plain(remaining.join(" "));
+  if (category === "Veículos") {
+    if (/\bmoto|motocic|scooter\b/.test(joined)) return "Motos";
+    if (/caminh|carreta|truck/.test(joined)) return "Caminhões";
+    if (/onibus|ônibus/.test(joined)) return "Ônibus";
+    if (/barco|lancha|aeronave|aviao|avião/.test(joined)) return "Barcos e aeronaves";
+    if (/carro|automovel|automóvel|utilitario|utilitário|van/.test(joined)) return "Carros, vans e utilitários";
+  }
+  const configured = portalCategories.find((item) => plain(item.name) === plain(category));
+  return configured?.subs.find((sub) => {
+    const normalized = plain(sub);
+    return remaining.some((label) => normalized.includes(plain(label)) || plain(label).includes(normalized));
+  }) || remaining[0] || "";
+}
+
+export function normalizeListingSourceRecord(source: UnknownListingSourceRecord, index: number): ImportRecord | null {
   const title = text(first(source, ["title", "titulo", "name", "nome"])); if (!title) return null;
   const rawId = text(first(source, ["slug", "url_slug", "id", "_id", "codigo", "code"]));
-  const seller = first(source, ["seller", "vendedor", "anunciante"]); const sellerRecord = seller && typeof seller === "object" ? seller as UnknownRecord : {};
+  const seller = first(source, ["seller", "vendedor", "anunciante"]); const sellerRecord = seller && typeof seller === "object" ? seller as UnknownListingSourceRecord : {};
   const price = priceCents(first(source, ["price", "preco", "valor", "value"]));
+  const labels = sourceCategories(source);
+  const category = sourceCategory(labels, title);
+  const publishedAt = text(first(source, ["createdAt", "created_at", "publishedAt", "data_publicacao", "date"]));
+  const createdAt = Number.isFinite(Date.parse(publishedAt)) ? new Date(publishedAt).toISOString() : new Date().toISOString();
   return {
     id: `import-${slug(rawId || title, index)}`,
     title: title.slice(0, 120),
     description: text(first(source, ["description", "descricao", "content", "conteudo"])).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").slice(0, 5000) || `Anúncio importado: ${title}`,
-    category: mapCategory(text(first(source, ["category", "categoria", "categoryName"])), title),
-    subcategory: text(first(source, ["subcategory", "subcategoria", "subCategory", "categoryChild"])),
+    category,
+    subcategory: text(first(source, ["subcategory", "subcategoria", "subCategory", "categoryChild"])) || sourceSubcategory(category, labels),
     priceCents: price,
     negotiable: price == null || price === 0,
     images: imageUrls(source),
     displayName: text(first(sellerRecord, ["name", "nome"])) || text(first(source, ["sellerName", "nomeVendedor"])) || "Importação de anúncios",
     whatsapp: text(first(sellerRecord, ["whatsapp", "phone", "telefone"]) || first(source, ["whatsapp", "phone", "telefone"])).replace(/\D/g, "").slice(-13) || "31000000000",
+    createdAt,
+    sourceId: text(first(source, ["id", "_id", "codigo", "code"])),
+    sourceUrl: text(first(source, ["link", "url", "externalUrl", "sourceUrl"])),
+    sourceCategories: labels,
   };
+}
+
+export function makeListingSourceRecordsUnique(records: ImportRecord[]) {
+  const seen = new Set<string>();
+  return records.map((record, index) => {
+    if (!seen.has(record.id)) {
+      seen.add(record.id);
+      return record;
+    }
+    const suffix = slug(record.sourceId || String(index + 1), index).slice(-32);
+    let id = `${record.id}-${suffix}`;
+    let attempt = 2;
+    while (seen.has(id)) id = `${record.id}-${suffix}-${attempt++}`;
+    seen.add(id);
+    return { ...record, id };
+  });
 }
 function validateSourceUrl(value: string) {
   const url = new URL(value); if (!/^https?:$/.test(url.protocol)) throw new Error("Use um endereço HTTP ou HTTPS.");
@@ -58,7 +120,7 @@ function plain(value: string) {
  * Classificação local e determinística. Ela é deliberadamente rápida: não faz
  * chamadas externas e permite processar milhares de anúncios em poucos lotes.
  */
-function classifyLocally(record: ImportRecord, categories: Pick<PortalCategory, "name" | "subs">[]) {
+export function classifyListingLocally(record: ImportRecord, categories: Pick<PortalCategory, "name" | "subs">[]) {
   const source = plain(`${record.category} ${record.subcategory} ${record.title} ${record.description}`);
   const category = mapCategory(record.category, `${record.title} ${record.description}`);
   const configured = categories.find((item) => plain(item.name) === plain(category));
@@ -110,11 +172,11 @@ export async function startListingImport(sourceUrl: string) {
   finally { clearTimeout(timeout); }
   if (!response.ok) throw new Error(`O endereço de importação respondeu com HTTP ${response.status}.`);
   const json: unknown = await response.json().catch(() => { throw new Error("O endereço não retornou um JSON válido."); });
-  const root = json && typeof json === "object" ? json as UnknownRecord : {};
+  const root = json && typeof json === "object" ? json as UnknownListingSourceRecord : {};
   const collection = Array.isArray(json) ? json : first(root, ["listings", "anuncios", "ads", "items", "data"]);
   if (!Array.isArray(collection)) throw new Error("O JSON não contém uma lista de anúncios reconhecida.");
-  const normalized = collection.slice(0, 3000).flatMap((item, index) => item && typeof item === "object" ? [normalize(item as UnknownRecord, index)].filter((record): record is ImportRecord => Boolean(record)) : []);
-  const records = [...new Map(normalized.map((record) => [record.id, record])).values()];
+  const normalized = collection.slice(0, 3000).flatMap((item, index) => item && typeof item === "object" ? [normalizeListingSourceRecord(item as UnknownListingSourceRecord, index)].filter((record): record is ImportRecord => Boolean(record)) : []);
+  const records = makeListingSourceRecordsUnique(normalized);
   if (!records.length) throw new Error("Nenhum anúncio válido foi encontrado no JSON.");
   const userId = await ensureImportCustomer(); await writePortalSettings({ listing_import_url: url });
   const { env } = await import("cloudflare:workers"); const id = crypto.randomUUID(); const now = new Date().toISOString();
@@ -135,7 +197,7 @@ export async function processNextListingImport(jobId: string, categories: Pick<P
   await env.DB.prepare("UPDATE portal_import_queue SET status = 'processing' WHERE job_id = ? AND listing_id = ?").bind(jobId, row.listingId).run();
   const record = JSON.parse(row.payloadJson) as ImportRecord & { userId: number }; const now = new Date().toISOString();
   try {
-    const classification = classifyLocally(record, categories);
+    const classification = classifyListingLocally(record, categories);
     const location = { label: "Belo Horizonte, MG", latitude: -19.9166813, longitude: -43.9344931 };
     // As URLs originais deixam o anúncio visível imediatamente. A otimização das
     // imagens pode ser executada depois, sem bloquear a publicação do catálogo.
@@ -145,15 +207,17 @@ export async function processNextListingImport(jobId: string, categories: Pick<P
       price_cents, monthly_rent_cents, iptu_cents, condo_cents, negotiable, address, latitude, longitude, display_name, whatsapp,
       attributes_json, features_json, images_json, cover_image, publication_type, featured_plan, featured_until, expires_at, status,
       payment_provider, payment_reference, payment_method, payment_amount_cents, payment_expires_at, payment_status, created_at, updated_at)
-      VALUES (?, ?, ?, ?, 'Venda', ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, '{}', '[]', ?, ?, 'free', NULL, NULL, NULL,
+      VALUES (?, ?, ?, ?, 'Venda', ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, 'free', NULL, NULL, NULL,
         'active', NULL, NULL, NULL, NULL, NULL, NULL, ?, ?)
       ON CONFLICT(id) DO UPDATE SET user_id=excluded.user_id, title=excluded.title, description=excluded.description,
         category=excluded.category, subcategory=excluded.subcategory, price_cents=excluded.price_cents, negotiable=excluded.negotiable,
         address=excluded.address, latitude=excluded.latitude, longitude=excluded.longitude, display_name=excluded.display_name,
-        whatsapp=excluded.whatsapp, images_json=excluded.images_json, cover_image=excluded.cover_image, status='active', updated_at=excluded.updated_at`)
+        whatsapp=excluded.whatsapp, attributes_json=excluded.attributes_json, images_json=excluded.images_json,
+        cover_image=excluded.cover_image, status='active', created_at=excluded.created_at, updated_at=excluded.updated_at`)
       .bind(record.id, record.userId, record.title, record.description, classification.category, classification.subcategory,
         record.priceCents, record.negotiable ? 1 : 0, location.label, String(location.latitude), String(location.longitude),
-        record.displayName, record.whatsapp, JSON.stringify(images), images[0] || "/favicon.svg", now, now).run();
+        record.displayName, record.whatsapp, JSON.stringify({ sourceUrl: record.sourceUrl, sourceCategories: record.sourceCategories }),
+        JSON.stringify(images), images[0] || "/favicon.svg", record.createdAt, now).run();
     await env.DB.batch([
       env.DB.prepare("UPDATE portal_import_queue SET status = 'completed' WHERE job_id = ? AND listing_id = ?").bind(jobId, row.listingId),
       env.DB.prepare(`INSERT INTO portal_import_logs (job_id, listing_id, title, category, subcategory, status, message, created_at)
@@ -196,7 +260,8 @@ export async function synchronizeImportedListings(categories: Pick<PortalCategor
   const now = new Date().toISOString();
   for (let offset = 0; offset < rows.length; offset += 80) {
     await env.DB.batch(rows.slice(offset, offset + 80).map((row) => {
-      const classification = classifyLocally({ ...row, negotiable: Boolean(row.negotiable), images: [], displayName: row.displayName, whatsapp: row.whatsapp }, categories);
+      const classification = classifyListingLocally({ ...row, negotiable: Boolean(row.negotiable), images: [], displayName: row.displayName,
+        whatsapp: row.whatsapp, createdAt: now, sourceId: row.id, sourceUrl: "", sourceCategories: [row.category, row.subcategory].filter(Boolean) }, categories);
       return env.DB.prepare("UPDATE portal_listings SET category = ?, subcategory = ?, status = 'active', updated_at = ? WHERE id = ?")
         .bind(classification.category, classification.subcategory, now, row.id);
     }));
