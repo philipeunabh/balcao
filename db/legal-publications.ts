@@ -49,26 +49,50 @@ function normalizeRow(row: LegalPublicationRow): LegalPublication {
   return { ...publication, source: row.source === "wordpress" ? "wordpress" : "manual", images: parseImages(imagesJson) };
 }
 
+function normalizeDateFilter(value: string | undefined) {
+  const normalized = (value || "").trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(normalized) ? normalized : "";
+}
+
 export async function listLegalPublications(options: {
   query?: string;
+  startDate?: string;
+  endDate?: string;
   limit?: number;
   offset?: number;
   includeInactive?: boolean;
 } = {}) {
   const { env } = await import("cloudflare:workers");
   const query = (options.query || "").trim().slice(0, 120);
+  const startDate = normalizeDateFilter(options.startDate);
+  const endDate = normalizeDateFilter(options.endDate);
   const limit = Math.min(Math.max(Math.trunc(options.limit || 12), 1), 250);
   const offset = Math.max(Math.trunc(options.offset || 0), 0);
-  const statusClause = options.includeInactive ? "1 = 1" : "status = 'active'";
-  const searchClause = query ? "AND (lower(title) LIKE lower(?) OR lower(body) LIKE lower(?))" : "";
-  const pattern = `%${query}%`;
+  const whereClauses = [options.includeInactive ? "1 = 1" : "status = 'active'"];
+  const bindings: Array<string | number> = [];
+
+  if (query) {
+    whereClauses.push("(lower(title) LIKE lower(?) OR lower(body) LIKE lower(?))");
+    const pattern = `%${query}%`;
+    bindings.push(pattern, pattern);
+  }
+  if (startDate) {
+    whereClauses.push("substr(published_at, 1, 10) >= ?");
+    bindings.push(startDate);
+  }
+  if (endDate) {
+    whereClauses.push("substr(published_at, 1, 10) <= ?");
+    bindings.push(endDate);
+  }
+
+  const whereClause = whereClauses.join(" AND ");
   const listStatement = env.DB.prepare(`SELECT ${selectColumns} FROM portal_legal_publications
-    WHERE ${statusClause} ${searchClause}
+    WHERE ${whereClause}
     ORDER BY published_at DESC, created_at DESC LIMIT ? OFFSET ?`);
   const countStatement = env.DB.prepare(`SELECT COUNT(*) AS total FROM portal_legal_publications
-    WHERE ${statusClause} ${searchClause}`);
-  const list = query ? listStatement.bind(pattern, pattern, limit, offset) : listStatement.bind(limit, offset);
-  const count = query ? countStatement.bind(pattern, pattern) : countStatement;
+    WHERE ${whereClause}`);
+  const list = listStatement.bind(...bindings, limit, offset);
+  const count = bindings.length ? countStatement.bind(...bindings) : countStatement;
   const [rows, totalRow] = await Promise.all([
     list.all<LegalPublicationRow>(),
     count.first<{ total: number | string }>(),
@@ -117,7 +141,7 @@ export async function upsertWordpressLegalPublications(items: ImportedLegalPubli
   let updated = 0;
   const statements = items.map((item) => {
     const previousPdf = existing.get(item.id);
-    const initialImages = "[]";
+    const initialImages = JSON.stringify(item.initialImageUrl ? [item.initialImageUrl] : []);
     if (previousPdf === undefined) {
       imported += 1;
       return env.DB.prepare(`INSERT INTO portal_legal_publications (

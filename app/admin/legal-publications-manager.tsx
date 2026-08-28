@@ -45,7 +45,6 @@ export default function LegalPublicationsManager() {
   const [busy, setBusy] = useState(false);
   const [busyId, setBusyId] = useState("");
   const [status, setStatus] = useState("");
-  const [progress, setProgress] = useState({ current: 0, total: 0 });
 
   const load = useCallback(async () => {
     const response = await fetch("/api/admin/legal-publications", { cache: "no-store" });
@@ -105,14 +104,14 @@ export default function LegalPublicationsManager() {
 
   async function archivePublication(publication: LegalPublication) {
     if (publication.pdfKey) return publication;
-    setStatus(`Importando o PDF: ${publication.title}`);
+    setStatus(`Arquivando o PDF: ${publication.title}`);
     const response = await fetch("/api/admin/legal-publications/archive", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ id: publication.id }),
     });
     const data = await response.json().catch(() => ({})) as ApiPayload;
-    if (!response.ok || !data.publication) throw new Error(data.error || "Não foi possível importar o PDF.");
+    if (!response.ok || !data.publication) throw new Error(data.error || "Não foi possível arquivar o PDF.");
     setPublications((current) => current.map((item) => item.id === publication.id ? data.publication as LegalPublication : item));
     return data.publication;
   }
@@ -126,8 +125,7 @@ export default function LegalPublicationsManager() {
     event.preventDefault();
     if (busy) return;
     setBusy(true);
-    setStatus("Lendo o JSON do WordPress e identificando os editais…");
-    setProgress({ current: 0, total: 0 });
+    setStatus("Lendo o WordPress e cadastrando os editais…");
     try {
       const response = await fetch("/api/admin/legal-publications/import", {
         method: "POST",
@@ -138,22 +136,12 @@ export default function LegalPublicationsManager() {
       if (!response.ok) throw new Error(data.error || "Não foi possível importar o JSON do WordPress.");
       const importedPublications = Array.isArray(data.publications) ? data.publications : [];
       setPublications(importedPublications);
-      const queue = importedPublications.filter((item) => item.source === "wordpress" && (!item.pdfKey || !item.images.length));
-      setProgress({ current: 0, total: queue.length });
-      let failures = 0;
-      for (let index = 0; index < queue.length; index += 1) {
-        const item = queue[index];
-        setBusyId(item.id);
-        try {
-          await preparePublication(item);
-        } catch {
-          failures += 1;
-        }
-        setProgress({ current: index + 1, total: queue.length });
-      }
       await load();
+      const pendingPreviews = importedPublications.filter((item) => item.source === "wordpress" && !item.images.length).length;
       const summary = `${data.detected || importedPublications.length} editais localizados; ${data.imported || 0} novos e ${data.updated || 0} atualizados.`;
-      setStatus(failures ? `${summary} ${failures} PDFs exigem uma nova tentativa.` : `${summary} PDFs e imagens gerados corretamente.`);
+      setStatus(pendingPreviews
+        ? `${summary} Importação concluída. ${pendingPreviews} documento${pendingPreviews === 1 ? "" : "s"} sem prévia pode${pendingPreviews === 1 ? "" : "m"} ter as imagens geradas individualmente.`
+        : `${summary} Importação concluída.`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Não foi possível concluir a importação.");
     } finally {
@@ -206,18 +194,17 @@ export default function LegalPublicationsManager() {
   return (
     <section className="admin-section legal-admin">
       <div className="admin-section-head">
-        <div><span className="hero-kicker">Documentos oficiais</span><h1>Publicidade Legal</h1><p>Importe os editais do WordPress ou publique um novo PDF. O sistema converte automaticamente até 12 páginas de cada documento em imagens.</p></div>
-        <a className="soft-button" href="/publicidade-legal" target="_blank" rel="noreferrer">Ver página pública ↗</a>
+        <div><span className="hero-kicker">Documentos oficiais</span><h1>Publicidade Legal</h1><p>Importe os editais do WordPress ou publique um novo PDF. A importação cadastra os documentos imediatamente; a geração completa das imagens pode ser executada por documento quando necessário.</p></div>
+        <a className="soft-button" href="/publicidadelegal" target="_blank" rel="noreferrer">Ver página pública ↗</a>
       </div>
 
       <div className="legal-admin-actions">
         <form className="panel-card admin-form legal-import-form" onSubmit={importWordpress}>
           <span className="legal-admin-icon" aria-hidden="true">↻</span>
           <h2>Importar do WordPress</h2>
-          <p>O sistema lê o JSON, identifica os PDFs dos editais, arquiva os documentos e gera as imagens das páginas.</p>
+          <p>O sistema lê somente os campos necessários da API, identifica os PDFs e reutiliza a imagem destacada do WordPress quando ela estiver disponível.</p>
           <label>URL do site ou endpoint JSON<input type="url" value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="https://jornalbalcao.com.br/publicidadelegal" required /></label>
-          <button className="primary-button" disabled={busy}>{busy && progress.total ? `Processando ${progress.current}/${progress.total}` : "Importar publicações existentes"}</button>
-          {progress.total ? <div className="legal-import-progress"><span style={{ width: `${Math.round((progress.current / progress.total) * 100)}%` }} /></div> : null}
+          <button className="primary-button" disabled={busy}>{busy ? "Importando…" : "Importar publicações existentes"}</button>
         </form>
 
         <form className="panel-card admin-form legal-create-form" onSubmit={addManualPublication}>
@@ -235,17 +222,20 @@ export default function LegalPublicationsManager() {
       <section className="panel-card legal-admin-list">
         <header><div><h2>Publicações cadastradas</h2><small>{publications.length} documentos disponíveis no painel</small></div><button type="button" className="soft-button" onClick={() => void load()} disabled={busy}>Atualizar lista</button></header>
         <div>
-          {publications.map((item) => (
-            <article key={item.id}>
-              <a href={item.pdfUrl} target="_blank" rel="noreferrer" className="legal-admin-preview">
-                {item.images[0] ? <img src={item.images[0]} alt="" /> : <span>PDF</span>}
-              </a>
-              <div><b>{item.title}</b><span>{publicationDate(item.publishedAt)} · {item.source === "wordpress" ? "WordPress" : "Cadastro manual"}</span><small>{item.filename}</small></div>
-              <em className={item.pdfKey && item.images.length ? "ready" : "pending"}>{item.pdfKey && item.images.length ? `${item.images.length} imagem${item.images.length === 1 ? "" : "s"}` : "Processamento pendente"}</em>
-              <a href={item.pdfUrl} target="_blank" rel="noreferrer">Abrir PDF ↗</a>
-              {item.pdfKey && item.images.length ? null : <button type="button" onClick={() => void retryPublication(item)} disabled={busy}>{busyId === item.id ? "Processando…" : "Gerar imagens"}</button>}
-            </article>
-          ))}
+          {publications.map((item) => {
+            const ready = Boolean(item.pdfUrl) && item.images.length > 0;
+            return (
+              <article key={item.id}>
+                <a href={item.pdfUrl} target="_blank" rel="noreferrer" className="legal-admin-preview">
+                  {item.images[0] ? <img src={item.images[0]} alt="" /> : <span>PDF</span>}
+                </a>
+                <div><b>{item.title}</b><span>{publicationDate(item.publishedAt)} · {item.source === "wordpress" ? "WordPress" : "Cadastro manual"}</span><small>{item.filename}</small></div>
+                <em className={ready ? "ready" : "pending"}>{ready ? `${item.images.length} imagem${item.images.length === 1 ? "" : "s"}${item.pdfKey ? " · PDF arquivado" : ""}` : "Prévia pendente"}</em>
+                <a href={item.pdfUrl} target="_blank" rel="noreferrer">Abrir PDF ↗</a>
+                {item.pdfKey && item.images.length ? null : <button type="button" onClick={() => void retryPublication(item)} disabled={busy}>{busyId === item.id ? "Processando…" : "Arquivar e gerar imagens"}</button>}
+              </article>
+            );
+          })}
           {!publications.length ? <p>Nenhuma publicação legal cadastrada.</p> : null}
         </div>
       </section>
