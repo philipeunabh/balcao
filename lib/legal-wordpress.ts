@@ -42,6 +42,9 @@ export function wordpressLegalEndpoint(value: string) {
   if (/\/wp\/v2\/posts\/?$/i.test(url.pathname)) {
     if (!url.searchParams.has("per_page")) url.searchParams.set("per_page", "100");
     if (!url.searchParams.has("_embed")) url.searchParams.set("_embed", "wp:featuredmedia");
+    if (!url.searchParams.has("_fields")) {
+      url.searchParams.set("_fields", "id,date,date_gmt,slug,link,title,excerpt,content,_embedded");
+    }
     if (!url.searchParams.has("orderby")) url.searchParams.set("orderby", "date");
     if (!url.searchParams.has("order")) url.searchParams.set("order", "desc");
   }
