@@ -1,0 +1,102 @@
+{
+  "$schema": "https://raw.githubusercontent.com/firebase/firebase-tools/master/schema/firestore-blueprint.json",
+  "entities": {
+    "portal_users": {
+      "title": "Portal Users",
+      "description": "Registered users and advertisers in the portal",
+      "type": "object",
+      "properties": {
+        "id": { "type": "number" },
+        "accountType": { "type": "string" },
+        "taxId": { "type": "string" },
+        "email": { "type": "string" },
+        "name": { "type": "string" },
+        "whatsapp": { "type": "string" },
+        "profileImageUrl": { "type": "string" },
+        "isAdmin": { "type": "boolean" },
+        "status": { "type": "string" },
+        "planCode": { "type": "string" },
+        "planName": { "type": "string" },
+        "adLimit": { "type": "number" },
+        "activeAds": { "type": "number" },
+        "verifiedAt": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["email", "name", "taxId"]
+    },
+    "portal_listings": {
+      "title": "Portal Listings",
+      "description": "Classified ad listings in the portal",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "number" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "negotiationType": { "type": "string" },
+        "category": { "type": "string" },
+        "subcategory": { "type": "string" },
+        "priceCents": { "type": "number" },
+        "monthlyRentCents": { "type": "number" },
+        "address": { "type": "string" },
+        "displayName": { "type": "string" },
+        "whatsapp": { "type": "string" },
+        "coverImage": { "type": "string" },
+        "imagesJson": { "type": "string" },
+        "publicationType": { "type": "string" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "userId", "title", "category", "subcategory", "status"]
+    },
+    "portal_virtual_stores": {
+      "title": "Virtual Stores",
+      "description": "Virtual stores and dealership shops",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "number" },
+        "slug": { "type": "string" },
+        "name": { "type": "string" },
+        "type": { "type": "string" },
+        "planCode": { "type": "string" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "slug", "name"]
+    },
+    "portal_chat_conversations": {
+      "title": "Chat Conversations",
+      "description": "Chat conversations between buyers and sellers",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "listingId": { "type": "string" },
+        "listingTitle": { "type": "string" },
+        "buyerUserId": { "type": "number" },
+        "sellerUserId": { "type": "number" },
+        "status": { "type": "string" },
+        "lastMessageAt": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "listingId", "buyerUserId", "sellerUserId"]
+    },
+    "portal_chat_messages": {
+      "title": "Chat Messages",
+      "description": "Messages sent within chat conversations",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "conversationId": { "type": "string" },
+        "senderUserId": { "type": "number" },
+        "body": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "conversationId", "senderUserId", "body"]
+    }
+  }
+}

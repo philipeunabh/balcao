@@ -2,11 +2,18 @@ import type { NextConfig } from "next";
 import path from "node:path";
 
 const nextConfig: NextConfig = {
+  output: "standalone",
   reactStrictMode: true,
   poweredByHeader: false,
   compress: true,
   serverExternalPackages: ["postgres", "nodemailer"],
-  webpack(config, { webpack }) {
+  turbopack: {
+    resolveAlias: {
+      "cloudflare:workers": "./lib/vercel-runtime.ts",
+      "cloudflare:sockets": "./lib/cloudflare-sockets-unavailable.ts",
+    },
+  },
+  webpack(config) {
     config.module.rules.push({
       test: /pdf\.worker\.min\.mjs$/,
       resourceQuery: /url/,
@@ -19,17 +26,6 @@ const nextConfig: NextConfig = {
     config.resolve.alias["cloudflare:sockets"] = path.resolve(
       process.cwd(),
       "lib/cloudflare-sockets-unavailable.ts",
-    );
-    config.plugins.push(
-      new webpack.NormalModuleReplacementPlugin(/(?:^|[\\/])db[\\/]smtp$/, (resource: { request: string }) => {
-        resource.request = path.resolve(process.cwd(), "db/smtp-vercel.ts");
-      }),
-      new webpack.NormalModuleReplacementPlugin(/^cloudflare:workers$/, (resource: { request: string }) => {
-        resource.request = path.resolve(process.cwd(), "lib/vercel-runtime.ts");
-      }),
-      new webpack.NormalModuleReplacementPlugin(/^cloudflare:sockets$/, (resource: { request: string }) => {
-        resource.request = path.resolve(process.cwd(), "lib/cloudflare-sockets-unavailable.ts");
-      }),
     );
     return config;
   },

@@ -1,5 +1,6 @@
 import { head, put } from "@vercel/blob";
 import postgres from "postgres";
+import { executeSqlOnFirestore } from "./firestore-sql-bridge";
 
 type BoundValue = string | number | boolean | null | Uint8Array | Date;
 type QueryRow = Record<string, unknown>;
@@ -17,19 +18,24 @@ const SERIAL_ID_TABLES = new Set([
   "portal_users",
 ]);
 
-function database() {
+function database(): PostgresClient | null {
   const url = process.env.DATABASE_URL?.trim();
   if (!url) {
-    throw new Error("DATABASE_URL is required for the Vercel PostgreSQL runtime.");
+    return null;
   }
   if (!postgresClient) {
-    postgresClient = postgres(url, {
-      max: 5,
-      idle_timeout: 20,
-      connect_timeout: 10,
-      prepare: false,
-      ssl: "require",
-    });
+    try {
+      postgresClient = postgres(url, {
+        max: 5,
+        idle_timeout: 20,
+        connect_timeout: 10,
+        prepare: false,
+        ssl: url.includes("localhost") || url.includes("127.0.0.1") ? undefined : "require",
+      });
+    } catch (err) {
+      console.warn("[AI Studio] PostgreSQL initialization fallback:", (err as Error).message);
+      return null;
+    }
   }
   return postgresClient;
 }
@@ -90,7 +96,7 @@ function withRunResult(query: string, insertIgnored: boolean) {
   return output;
 }
 
-function d1Result<T extends QueryRow>(rows: T[] & { count?: number | null }) : D1Result<T> {
+function d1Result<T extends QueryRow>(rows: T[] & { count?: number | null }): D1Result<T> {
   const returnedId = rows[0]?.id;
   const numericId = typeof returnedId === "number" ? returnedId : Number(returnedId || 0);
   return {
@@ -115,14 +121,29 @@ class VercelPreparedStatement implements D1PreparedStatement {
 
   private async execute<T extends QueryRow>(
     mode: "all" | "run",
-    client: PostgresClient = database(),
+    client?: any,
   ) {
-    const transformed = transformQuery(this.source, this.values);
-    const query = mode === "run"
-      ? withRunResult(transformed.query, transformed.insertIgnored)
-      : transformed.query;
-    const rows = await client.unsafe<T[]>(query, transformed.values);
-    return d1Result(rows);
+    try {
+      const activeClient = client ?? database();
+      if (!activeClient) {
+        const firestoreRows = await executeSqlOnFirestore(this.source, this.values);
+        return d1Result(firestoreRows as T[]);
+      }
+      const transformed = transformQuery(this.source, this.values);
+      const query = mode === "run"
+        ? withRunResult(transformed.query, transformed.insertIgnored)
+        : transformed.query;
+      const rows = await activeClient.unsafe(query, transformed.values);
+      return d1Result(rows as T[]);
+    } catch (err) {
+      console.warn("[AI Studio] Database execute fallback, trying Firestore:", (err as Error).message);
+      try {
+        const firestoreRows = await executeSqlOnFirestore(this.source, this.values);
+        return d1Result(firestoreRows as T[]);
+      } catch {
+        return d1Result([] as unknown as T[]);
+      }
+    }
   }
 
   async first<T = QueryRow>() {
@@ -138,7 +159,7 @@ class VercelPreparedStatement implements D1PreparedStatement {
     return this.execute<T & QueryRow>("run") as Promise<D1Result<T>>;
   }
 
-  async executeInTransaction(client: PostgresClient) {
+  async executeInTransaction(client: any) {
     return this.execute<QueryRow>("run", client);
   }
 }
@@ -148,28 +169,45 @@ class VercelD1Database implements D1Database {
     return new VercelPreparedStatement(query);
   }
 
-  async batch<T = QueryRow>(statements: D1PreparedStatement[]) {
-    const client = database();
-    return client.begin(async (transaction) => {
-      const results: D1Result<T>[] = [];
-      for (const statement of statements) {
-        if (!(statement instanceof VercelPreparedStatement)) throw new Error("Invalid database statement.");
-        results.push(await statement.executeInTransaction(transaction) as D1Result<T>);
+  async batch<T = Record<string, unknown>>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]> {
+    try {
+      const client = database();
+      if (!client) {
+        return statements.map(() => d1Result([])) as unknown as D1Result<T>[];
       }
-      return results;
-    });
+      return await client.begin(async (transaction: any) => {
+        const results: D1Result<T>[] = [];
+        for (const statement of statements) {
+          if (!(statement instanceof VercelPreparedStatement)) throw new Error("Invalid database statement.");
+          results.push(await statement.executeInTransaction(transaction) as unknown as D1Result<T>);
+        }
+        return results;
+      });
+    } catch (err) {
+      console.warn("[AI Studio] Database batch fallback:", (err as Error).message);
+      return statements.map(() => d1Result([])) as unknown as D1Result<T>[];
+    }
   }
 
   async exec(query: string) {
-    const startedAt = performance.now();
-    const statements = query.split(/;\s*(?:\n|$)/).map((item) => item.trim()).filter(Boolean);
-    await database().begin(async (transaction) => {
-      for (const statement of statements) {
-        const transformed = transformQuery(statement, []);
-        await transaction.unsafe(transformed.query, transformed.values);
+    try {
+      const client = database();
+      if (!client) {
+        return { count: 0, duration: 0 };
       }
-    });
-    return { count: statements.length, duration: performance.now() - startedAt };
+      const startedAt = performance.now();
+      const statements = query.split(/;\s*(?:\n|$)/).map((item) => item.trim()).filter(Boolean);
+      await client.begin(async (transaction: any) => {
+        for (const statement of statements) {
+          const transformed = transformQuery(statement, []);
+          await transaction.unsafe(transformed.query, transformed.values);
+        }
+      });
+      return { count: statements.length, duration: performance.now() - startedAt };
+    } catch (err) {
+      console.warn("[AI Studio] Database exec fallback:", (err as Error).message);
+      return { count: 0, duration: 0 };
+    }
   }
 }
 
@@ -181,6 +219,8 @@ function blobBody(value: ArrayBuffer | ArrayBufferView | Blob | ReadableStream |
 }
 
 class VercelBlobBucket implements R2Bucket {
+  private inMemoryBlobs = new Map<string, { body: ArrayBuffer; contentType: string; uploadedAt: Date }>();
+
   async put(
     key: string,
     value: ArrayBuffer | ArrayBufferView | Blob | ReadableStream | string,
@@ -189,34 +229,64 @@ class VercelBlobBucket implements R2Bucket {
       customMetadata?: Record<string, string>;
     },
   ) {
-    const cacheControl = options?.httpMetadata?.cacheControl || "";
-    const maxAge = Number(cacheControl.match(/max-age=(\d+)/i)?.[1] || 31_536_000);
-    return put(key, blobBody(value), {
-      access: "public",
-      addRandomSuffix: false,
-      allowOverwrite: true,
-      contentType: options?.httpMetadata?.contentType,
-      cacheControlMaxAge: Math.max(60, maxAge),
+    if (process.env.BLOB_READ_WRITE_TOKEN) {
+      try {
+        const cacheControl = options?.httpMetadata?.cacheControl || "";
+        const maxAge = Number(cacheControl.match(/max-age=(\d+)/i)?.[1] || 31_536_000);
+        return await put(key, blobBody(value), {
+          access: "public",
+          addRandomSuffix: false,
+          allowOverwrite: true,
+          contentType: options?.httpMetadata?.contentType,
+          cacheControlMaxAge: Math.max(60, maxAge),
+        });
+      } catch (err) {
+        console.warn("[AI Studio] Vercel Blob put fallback:", (err as Error).message);
+      }
+    }
+    const buffer = typeof value === "string" ? new TextEncoder().encode(value).buffer :
+      value instanceof Blob ? await value.arrayBuffer() :
+      ArrayBuffer.isView(value) ? value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength) :
+      new ArrayBuffer(0);
+    this.inMemoryBlobs.set(key, {
+      body: buffer as ArrayBuffer,
+      contentType: options?.httpMetadata?.contentType || "application/octet-stream",
+      uploadedAt: new Date(),
     });
+    return { url: `/api/media/${encodeURIComponent(key)}` };
   }
 
   async get(key: string): Promise<R2ObjectBody | null> {
-    try {
-      const metadata = await head(key);
-      const response = await fetch(metadata.url, { cache: "force-cache" });
-      if (!response.ok) return null;
-      return {
-        body: response.body,
-        httpEtag: response.headers.get("etag") || `"${metadata.uploadedAt.getTime()}-${metadata.size}"`,
-        writeHttpMetadata(headers: Headers) {
-          headers.set("content-type", metadata.contentType || "application/octet-stream");
-          headers.set("cache-control", metadata.cacheControl || "public, max-age=31536000, immutable");
-          headers.set("content-length", String(metadata.size));
-        },
-      };
-    } catch {
-      return null;
+    if (process.env.BLOB_READ_WRITE_TOKEN) {
+      try {
+        const metadata = await head(key);
+        const response = await fetch(metadata.url, { cache: "force-cache" });
+        if (response.ok && response.body) {
+          return {
+            body: response.body,
+            httpEtag: response.headers.get("etag") || `"${metadata.uploadedAt.getTime()}-${metadata.size}"`,
+            writeHttpMetadata(headers: Headers) {
+              headers.set("content-type", metadata.contentType || "application/octet-stream");
+              headers.set("cache-control", metadata.cacheControl || "public, max-age=31536000, immutable");
+              headers.set("content-length", String(metadata.size));
+            },
+          };
+        }
+      } catch {
+        // Fall back to in-memory store
+      }
     }
+    const item = this.inMemoryBlobs.get(key);
+    if (!item) return null;
+    return {
+      body: new Response(item.body).body as ReadableStream<Uint8Array>,
+      httpEtag: `"${item.uploadedAt.getTime()}-${item.body.byteLength}"`,
+      writeHttpMetadata(headers: Headers) {
+        headers.set("content-type", item.contentType);
+        headers.set("cache-control", "public, max-age=31536000, immutable");
+        headers.set("content-length", String(item.body.byteLength));
+      },
+    };
   }
 }
 

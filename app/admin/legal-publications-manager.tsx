@@ -2,7 +2,6 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
-import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
 type LegalPublication = {
   id: string;
@@ -74,7 +73,7 @@ export default function LegalPublicationsManager() {
 
   async function renderPdfImages(publication: LegalPublication) {
     const pdfjs = await import("pdfjs-dist");
-    pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+    pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version || "4.10.38"}/build/pdf.worker.min.mjs`;
     const response = await fetch(publication.pdfUrl, { cache: "no-store" });
     if (!response.ok) throw new Error("Não foi possível abrir o PDF armazenado.");
     const loadingTask = pdfjs.getDocument({ data: new Uint8Array(await response.arrayBuffer()) });
