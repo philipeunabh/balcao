@@ -1,0 +1,13 @@
+name: Atualizar Balcao News
+
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch:
+
+jobs:
+  refresh-news:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Atualizar feed de noticias
+        run: curl --fail --silent --show-error --retry 2 "https://jornalbalcao.com.br/api/news" > /dev/null

@@ -1,9 +1,11 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import "./requested-fixes.css";
 import PwaRegister from "./pwa-register";
 import AnalyticsTracker from "./analytics-tracker";
 import AdSenseManualGuard from "./adsense-manual-guard";
 import DeferredGlobalExperience from "./deferred-global-experience";
+import NewsCachePolicy from "./news-cache-policy";
 import { readPortalSettings } from "../db/settings";
 import { SITE_URL } from "../lib/site-url";
 
@@ -73,6 +75,7 @@ export default async function RootLayout({
       <body className="antialiased" data-adsense-client={adsenseClient || undefined} data-adsense-slot={adsenseSlot || undefined}>
         <AdSenseManualGuard />
         <AnalyticsTracker measurementId={analyticsId} />
+        <NewsCachePolicy />
         {children}
         <DeferredGlobalExperience />
         <PwaRegister />
