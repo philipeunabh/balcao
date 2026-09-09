@@ -1,0 +1,44 @@
+/* Ajustes visuais solicitados em 09/09/2026. */
+
+/* Rodapé: preto puro. */
+footer {
+  background: #000 !important;
+}
+
+/* Acesso administrativo: legibilidade normal e vermelho mais vibrante no hover. */
+footer .admin-access,
+footer .admin-access:visited {
+  color: #fff !important;
+}
+
+footer .admin-access:hover,
+footer .admin-access:focus-visible {
+  color: #fff !important;
+  border-color: #ff1722 !important;
+  background: #ff1722 !important;
+  box-shadow: 0 8px 22px rgba(255, 23, 34, 0.28);
+}
+
+/* Matérias importadas: nenhuma imagem pode ultrapassar a largura do conteúdo. */
+.news-article figure,
+.news-article-content figure,
+.article-content figure,
+.post-content figure,
+.entry-content figure,
+.news-content figure,
+.wp-block-image {
+  max-width: 100% !important;
+}
+
+.news-article img,
+.news-article-content img,
+.article-content img,
+.post-content img,
+.entry-content img,
+.news-content img,
+.wp-block-image img {
+  max-width: 100% !important;
+  height: auto !important;
+  display: block;
+  object-fit: contain;
+}
