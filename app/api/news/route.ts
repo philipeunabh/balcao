@@ -11,6 +11,9 @@ function postsEndpoint(base: string) {
   else if (/\/wp-json$/i.test(path)) url.pathname = `${path}/wp/v2/posts`;
   url.searchParams.set("_embed", "1");
   url.searchParams.set("per_page", "10");
+  url.searchParams.set("status", "publish");
+  url.searchParams.set("orderby", "date");
+  url.searchParams.set("order", "desc");
   return url.toString();
 }
 
@@ -30,12 +33,21 @@ export async function GET() {
   const settings = await readPortalSettings();
   const base = typeof settings.wordpress_api_url === "string" && settings.wordpress_api_url.trim() ? settings.wordpress_api_url.trim() : DEFAULT_WORDPRESS_API;
   try {
-    const response = await fetch(postsEndpoint(base), { headers: { Accept: "application/json" } });
+    const response = await fetch(postsEndpoint(base), {
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    });
     if (!response.ok) throw new Error(`WORDPRESS_${response.status}`);
     const data = await response.json() as WordPressPost[];
     const posts = Array.isArray(data) ? data.slice(0, 10).map(normalize) : [];
-    return NextResponse.json({ posts, configured: true }, { headers: { "Cache-Control": "public, max-age=300, stale-while-revalidate=3600" } });
+    return NextResponse.json(
+      { posts, configured: true, refreshedAt: new Date().toISOString() },
+      { headers: { "Cache-Control": "public, max-age=60, s-maxage=3600, stale-while-revalidate=300" } },
+    );
   } catch {
-    return NextResponse.json({ posts: [], configured: true, unavailable: true }, { status: 200, headers: { "Cache-Control": "no-store" } });
+    return NextResponse.json(
+      { posts: [], configured: true, unavailable: true },
+      { status: 200, headers: { "Cache-Control": "no-store" } },
+    );
   }
 }
